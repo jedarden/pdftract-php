@@ -1,25 +1,4 @@
-# Composer
-/vendor/
-composer.lock
-
-# PHPUnit
-.phpunit.cache/
-coverage/
-.phpunit.result.cache
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS
+vendor/
 .DS_Store
-Thumbs.db
-
-# Logs
 *.log
-
-# Build
-*.phar
+.phpunit.result.cache
