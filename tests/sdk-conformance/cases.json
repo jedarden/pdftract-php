@@ -1,0 +1,610 @@
+{
+  "version": "1.0.0",
+  "schema_version": "1.0",
+  "cases": [
+    {
+      "id": "extract-vector-scientific-paper",
+      "fixture": "scientific_paper/01.pdf",
+      "method": "extract",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false
+      },
+      "expected": {
+        "schema_version": "1.0",
+        "metadata.page_count": 1,
+        "pages.length": 1,
+        "pages[0].page_index": 0,
+        "pages[0].width": {"min": 500, "max": 700},
+        "pages[0].height": {"min": 700, "max": 900},
+        "pages[0].rotation": 0,
+        "pages[0].spans.length": {"min": 1},
+        "pages[0].blocks.length": {"min": 1},
+        "pages[0].blocks[0].kind": "heading",
+        "errors.length": 0
+      },
+      "tolerances": {
+        "pages[*].blocks[*].bbox": {"abs": 0.5},
+        "pages[*].spans[*].bbox": {"abs": 0.5}
+      },
+      "feature": "vector",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-scanned-receipt",
+      "fixture": "misc/01.pdf",
+      "method": "extract",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false
+      },
+      "expected": {
+        "schema_version": "1.0",
+        "metadata.page_count": 1,
+        "pages.length": 1,
+        "pages[0].page_index": 0,
+        "pages[0].page_type": "scanned",
+        "pages[0].spans.length": {"min": 1},
+        "pages[0].blocks.length": {"min": 1},
+        "pages[0].blocks[0].kind": "paragraph",
+        "errors.length": 0
+      },
+      "tolerances": {
+        "pages[*].blocks[*].bbox": {"abs": 1.0},
+        "pages[*].spans[*].bbox": {"abs": 1.0},
+        "pages[*].spans[*].confidence": {"abs": 0.2}
+      },
+      "feature": "ocr",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-encrypted-pdf",
+      "fixture": "encrypted/encrypted.pdf",
+      "method": "extract",
+      "options": {
+        "password": "test123",
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false
+      },
+      "expected": {
+        "schema_version": "1.0",
+        "metadata.is_encrypted": true,
+        "pages.length": {"min": 1},
+        "errors.length": 0
+      },
+      "tolerances": {},
+      "feature": "decrypt",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-fillable-form",
+      "fixture": "fillable-form/form.pdf",
+      "method": "extract",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false
+      },
+      "expected": {
+        "schema_version": "1.0",
+        "metadata.page_count": 1,
+        "form_fields.length": {"min": 1},
+        "pages.length": 1,
+        "errors.length": 0
+      },
+      "tolerances": {},
+      "feature": "forms",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-mixed-vector-scanned",
+      "fixture": "mixed/mixed.pdf",
+      "method": "extract",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false
+      },
+      "expected": {
+        "schema_version": "1.0",
+        "metadata.page_count": {"min": 2},
+        "pages.length": {"min": 2},
+        "pages[0].page_type": "mixed",
+        "errors.length": 0
+      },
+      "tolerances": {},
+      "feature": "mixed",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-large-document",
+      "fixture": "large/100pages.pdf",
+      "method": "extract",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false,
+        "timeout": 120
+      },
+      "expected": {
+        "schema_version": "1.0",
+        "metadata.page_count": 100,
+        "pages.length": 100,
+        "errors.length": 0
+      },
+      "tolerances": {},
+      "feature": "large",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-text-unicode-heavy",
+      "fixture": "scientific_paper/02.pdf",
+      "method": "extract_text",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false
+      },
+      "expected": {
+        "output_type": "string",
+        "min_length": 50,
+        "contains": ["Abstract", "Introduction"]
+      },
+      "tolerances": {},
+      "feature": "unicode",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-text-vertical-writing",
+      "fixture": "vertical/vertical.pdf",
+      "method": "extract_text",
+      "options": {
+        "ocr_language": "jpn",
+        "ocr_threshold": 0.7,
+        "preserve_layout": true
+      },
+      "expected": {
+        "output_type": "string",
+        "min_length": 10
+      },
+      "tolerances": {},
+      "feature": "vertical",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-text-math-content",
+      "fixture": "scientific_paper/03.pdf",
+      "method": "extract_text",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false
+      },
+      "expected": {
+        "output_type": "string",
+        "min_length": 100,
+        "contains": ["equation", "formula"]
+      },
+      "tolerances": {},
+      "feature": "math",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-markdown-table-heavy",
+      "fixture": "contract/01.pdf",
+      "method": "extract_markdown",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false
+      },
+      "expected": {
+        "output_type": "string",
+        "min_length": 100,
+        "contains": ["|", "AGREEMENT"]
+      },
+      "tolerances": {},
+      "feature": "tables",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-markdown-code-block",
+      "fixture": "code/code.pdf",
+      "method": "extract_markdown",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false
+      },
+      "expected": {
+        "output_type": "string",
+        "min_length": 50,
+        "contains": ["```", "function", "return"]
+      },
+      "tolerances": {},
+      "feature": "code",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-markdown-nested-heading",
+      "fixture": "scientific_paper/04.pdf",
+      "method": "extract_markdown",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false
+      },
+      "expected": {
+        "output_type": "string",
+        "min_length": 100,
+        "contains": ["#", "##", "###"]
+      },
+      "tolerances": {},
+      "feature": "headings",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-stream-page-at-a-time",
+      "fixture": "scientific_paper/05.pdf",
+      "method": "extract_stream",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false
+      },
+      "expected": {
+        "output_type": "iterator",
+        "frame_count": {"min": 3},
+        "first_frame_type": "header",
+        "last_frame_type": "footer",
+        "page_frames": {"min": 1}
+      },
+      "tolerances": {},
+      "feature": "stream",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-stream-cancellation",
+      "fixture": "large/50pages.pdf",
+      "method": "extract_stream",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "max_pages": 5
+      },
+      "expected": {
+        "output_type": "iterator",
+        "page_frames": {"max": 6}
+      },
+      "tolerances": {},
+      "feature": "stream",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-stream-ndjson-format",
+      "fixture": "scientific_paper/06.pdf",
+      "method": "extract_stream",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false
+      },
+      "expected": {
+        "output_type": "iterator",
+        "frame_count": {"min": 3},
+        "header_frame_has_schema_version": true,
+        "header_frame_has_total_pages": true
+      },
+      "tolerances": {},
+      "feature": "stream",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "search-literal-pattern",
+      "fixture": "scientific_paper/07.pdf",
+      "method": "search",
+      "options": {
+        "pattern": "Abstract",
+        "case_insensitive": false,
+        "regex": false,
+        "whole_word": false,
+        "max_results": null
+      },
+      "expected": {
+        "output_type": "iterator",
+        "min_matches": 1,
+        "first_match_page": 0,
+        "first_match_text": "Abstract"
+      },
+      "tolerances": {},
+      "feature": "search",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "search-regex-pattern",
+      "fixture": "scientific_paper/08.pdf",
+      "method": "search",
+      "options": {
+        "pattern": "\\b\\d{4}\\b",
+        "case_insensitive": false,
+        "regex": true,
+        "whole_word": false,
+        "max_results": null
+      },
+      "expected": {
+        "output_type": "iterator",
+        "min_matches": 1
+      },
+      "tolerances": {},
+      "feature": "search",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "search-case-insensitive",
+      "fixture": "invoice/01.pdf",
+      "method": "search",
+      "options": {
+        "pattern": "invoice",
+        "case_insensitive": true,
+        "regex": false,
+        "whole_word": false,
+        "max_results": null
+      },
+      "expected": {
+        "output_type": "iterator",
+        "min_matches": 1
+      },
+      "tolerances": {},
+      "feature": "search",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "search-no-match",
+      "fixture": "scientific_paper/09.pdf",
+      "method": "search",
+      "options": {
+        "pattern": "nonexistent_pattern_xyz123",
+        "case_insensitive": false,
+        "regex": false,
+        "whole_word": false,
+        "max_results": null
+      },
+      "expected": {
+        "output_type": "iterator",
+        "match_count": 0
+      },
+      "tolerances": {},
+      "feature": "search",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "get-metadata-complete",
+      "fixture": "scientific_paper/10.pdf",
+      "method": "get_metadata",
+      "options": {
+        "timeout": 30
+      },
+      "expected": {
+        "metadata.page_count": 1,
+        "metadata.has_title": true,
+        "metadata.has_author": true,
+        "metadata.has_creator": true
+      },
+      "tolerances": {},
+      "feature": "metadata",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "get-metadata-minimal",
+      "fixture": "misc/02.pdf",
+      "method": "get_metadata",
+      "options": {
+        "timeout": 30
+      },
+      "expected": {
+        "metadata.page_count": 1,
+        "metadata.title": null,
+        "metadata.author": null
+      },
+      "tolerances": {},
+      "feature": "metadata",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "get-metadata-xmp-only",
+      "fixture": "xmp/xmp-metadata.pdf",
+      "method": "get_metadata",
+      "options": {
+        "timeout": 30
+      },
+      "expected": {
+        "metadata.page_count": 1,
+        "metadata.has_xmp": true
+      },
+      "tolerances": {},
+      "feature": "xmp",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "hash-same-file-same-hash",
+      "fixture": "scientific_paper/11.pdf",
+      "method": "hash",
+      "options": {
+        "timeout": 30
+      },
+      "expected": {
+        "hash_type": "sha256",
+        "hash.length": 64,
+        "page_count": 1,
+        "fast_hash.length": 64,
+        "fast_hash_different_from_hash": true
+      },
+      "tolerances": {},
+      "feature": "hash",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "hash-content-stability",
+      "fixture": "scientific_paper/12.pdf",
+      "method": "hash",
+      "options": {
+        "timeout": 30
+      },
+      "expected": {
+        "hash_type": "sha256",
+        "hash.length": 64,
+        "content_hash_stable": true
+      },
+      "tolerances": {},
+      "feature": "hash",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "classify-academic-paper",
+      "fixture": "scientific_paper/13.pdf",
+      "method": "classify",
+      "options": {},
+      "expected": {
+        "category": "scientific_paper",
+        "confidence": {"min": 0.7},
+        "tags.length": {"min": 1},
+        "heuristics.has_abstract": true,
+        "heuristics.has_references": true
+      },
+      "tolerances": {
+        "confidence": {"abs": 0.2}
+      },
+      "feature": "classify",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "classify-scientific-paper",
+      "fixture": "scientific_paper/14.pdf",
+      "method": "classify",
+      "options": {},
+      "expected": {
+        "category": "scientific_paper",
+        "confidence": {"min": 0.7},
+        "tags.length": {"min": 1},
+        "heuristics.has_methods": true,
+        "heuristics.has_results": true
+      },
+      "tolerances": {
+        "confidence": {"abs": 0.2}
+      },
+      "feature": "classify",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "classify-scanned-receipt",
+      "fixture": "misc/03.pdf",
+      "method": "classify",
+      "options": {},
+      "expected": {
+        "category": "receipt",
+        "confidence": {"min": 0.7},
+        "tags.length": {"min": 1},
+        "heuristics.is_scanned": true
+      },
+      "tolerances": {
+        "confidence": {"abs": 0.2}
+      },
+      "feature": "classify",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "classify-fillable-form",
+      "fixture": "fillable-form/form.pdf",
+      "method": "classify",
+      "options": {},
+      "expected": {
+        "category": "form",
+        "confidence": {"min": 0.7},
+        "tags.length": {"min": 1},
+        "heuristics.has_form_fields": true
+      },
+      "tolerances": {
+        "confidence": {"abs": 0.2}
+      },
+      "feature": "classify",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "verify-receipt-valid",
+      "fixture": "receipts/valid-receipt.pdf",
+      "method": "verify_receipt",
+      "options": {
+        "receipt": "receipts/valid-receipt.receipt.json"
+      },
+      "expected": {
+        "valid": true
+      },
+      "tolerances": {},
+      "feature": "receipt",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "verify-receipt-tampered",
+      "fixture": "receipts/tampered-receipt.pdf",
+      "method": "verify_receipt",
+      "options": {
+        "receipt": "receipts/tampered-receipt.receipt.json"
+      },
+      "expected": {
+        "valid": false
+      },
+      "tolerances": {},
+      "feature": "receipt",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-broken-pdf",
+      "fixture": "broken/corrupt.pdf",
+      "method": "extract",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false
+      },
+      "expected": {
+        "errors.length": {"min": 1},
+        "errors[0].severity": "error"
+      },
+      "tolerances": {},
+      "feature": "error-handling",
+      "min_schema_version": "1.0"
+    },
+    {
+      "id": "extract-remote-pdf",
+      "fixture": "https://arxiv.org/pdf/2201.00001.pdf",
+      "method": "extract",
+      "options": {
+        "ocr_language": "eng",
+        "ocr_threshold": 0.7,
+        "preserve_layout": false,
+        "extract_images": false,
+        "timeout": 60
+      },
+      "expected": {
+        "schema_version": "1.0",
+        "metadata.page_count": {"min": 1},
+        "pages.length": {"min": 1},
+        "errors.length": 0
+      },
+      "tolerances": {},
+      "feature": "remote",
+      "min_schema_version": "1.0"
+    }
+  ]
+}

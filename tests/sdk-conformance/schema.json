@@ -1,0 +1,186 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jedarden/pdftract/schemas/sdk-conformance-v1.json",
+  "title": "pdftract SDK Conformance Suite Schema",
+  "description": "Schema for the pdftract SDK conformance test suite. Defines the structure of test cases that all SDK implementations must pass.",
+  "type": "object",
+  "required": ["version", "schema_version", "cases"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Version of the conformance suite itself. Bumping this triggers coordinated SDK releases.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "The pdftract output schema version this suite targets.",
+      "pattern": "^\\d+\\.\\d+$"
+    },
+    "cases": {
+      "type": "array",
+      "description": "Array of conformance test cases.",
+      "items": {
+        "type": "object",
+        "required": ["id", "fixture", "method", "options", "expected"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for this test case. Use kebab-case.",
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+          },
+          "fixture": {
+            "type": "string",
+            "description": "Path to the test fixture PDF, relative to the fixtures directory, or a remote URL."
+          },
+          "method": {
+            "type": "string",
+            "description": "The SDK method being tested.",
+            "enum": [
+              "extract",
+              "extract_text",
+              "extract_markdown",
+              "extract_stream",
+              "search",
+              "get_metadata",
+              "hash",
+              "classify",
+              "verify_receipt"
+            ]
+          },
+          "options": {
+            "type": "object",
+            "description": "Options to pass to the method. Varies by method.",
+            "properties": {
+              "ocr_language": {
+                "type": "string",
+                "description": "ISO 639-3 language code for OCR."
+              },
+              "ocr_threshold": {
+                "type": "number",
+                "description": "Confidence threshold for OCR (0-1).",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "preserve_layout": {
+                "type": "boolean",
+                "description": "Preserve original reading order and layout."
+              },
+              "extract_images": {
+                "type": "boolean",
+                "description": "Extract embedded images."
+              },
+              "image_format": {
+                "type": "string",
+                "description": "Format for extracted images.",
+                "enum": ["png", "jpg", "webp"]
+              },
+              "min_image_size": {
+                "type": "integer",
+                "description": "Minimum dimension for image extraction.",
+                "minimum": 1
+              },
+              "password": {
+                "type": "string",
+                "description": "Password for encrypted PDFs."
+              },
+              "timeout": {
+                "type": "integer",
+                "description": "Maximum seconds to wait for the operation.",
+                "minimum": 1
+              },
+              "max_pages": {
+                "type": "integer",
+                "description": "Maximum pages to process for streaming.",
+                "minimum": 1
+              },
+              "pattern": {
+                "type": "string",
+                "description": "Search pattern."
+              },
+              "case_insensitive": {
+                "type": "boolean",
+                "description": "Ignore case when matching."
+              },
+              "regex": {
+                "type": "boolean",
+                "description": "Treat pattern as regular expression."
+              },
+              "whole_word": {
+                "type": "boolean",
+                "description": "Match only whole words."
+              },
+              "max_results": {
+                "type": ["integer", "null"],
+                "description": "Maximum matches to return.",
+                "minimum": 1
+              },
+              "receipt": {
+                "type": "string",
+                "description": "Path to receipt file for verify_receipt."
+              }
+            }
+          },
+          "expected": {
+            "type": "object",
+            "description": "Expected results. Structure varies by method. Uses JSONPath-like syntax for nested fields.",
+            "additionalProperties": true
+          },
+          "tolerances": {
+            "type": "object",
+            "description": "Per-field tolerances for numeric comparisons. Uses JSONPath wildcard syntax.",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "abs": {
+                  "type": "number",
+                  "description": "Absolute tolerance."
+                },
+                "rel": {
+                  "type": "number",
+                  "description": "Relative tolerance (as a fraction, e.g., 0.01 for 1%)."
+                }
+              }
+            }
+          },
+          "feature": {
+            "type": "string",
+            "description": "Feature tag for this test. SDKs without this feature may skip the test.",
+            "enum": [
+              "vector",
+              "ocr",
+              "decrypt",
+              "forms",
+              "mixed",
+              "large",
+              "unicode",
+              "vertical",
+              "math",
+              "tables",
+              "code",
+              "headings",
+              "stream",
+              "search",
+              "metadata",
+              "xmp",
+              "hash",
+              "classify",
+              "receipt",
+              "error-handling",
+              "remote"
+            ]
+          },
+          "min_schema_version": {
+            "type": "string",
+            "description": "Minimum pdftract schema version required for this test.",
+            "pattern": "^\\d+\\.\\d+$"
+          },
+          "skip_reason": {
+            "type": "string",
+            "description": "If present, this test is skipped. Reason should document why."
+          }
+        }
+      },
+      "minItems": 1
+    }
+  }
+}
