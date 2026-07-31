@@ -49,9 +49,16 @@ not the default Packagist registry.
   `proc_open`/pipe-handling block instead of reusing the private `exec()`
   helper that `extract()`, `getMetadata()`, `hash()`, and `classify()`
   already share — six near-identical copies of the same subprocess logic.
-- No timeout is set on any `proc_open()` call — a hung or slow `pdftract`
+- ~~No timeout is set on any `proc_open()` call — a hung or slow `pdftract`
   invocation (e.g. a pathological PDF) blocks the calling PHP process
-  indefinitely.
+  indefinitely.~~ Fixed 2026-07-30 (bead `bf-jyj`): every subprocess is now
+  bounded by a configurable timeout enforced with `stream_select()` +
+  `proc_terminate()`, and stdout/stderr are drained concurrently (a child
+  filling the stderr pipe buffer used to deadlock the parent outright).
+  Buffered calls get a total wall-clock bound; `extractStream()`/`search()`
+  get an idle bound. When ADR-1's HTTP transport lands, the equivalent
+  (`CURLOPT_TIMEOUT` / `CURLOPT_CONNECTTIMEOUT`) must carry the same defaults
+  and the same `timeout` per-call option.
 - `origin` pointed directly at `github.com/jedarden/pdftract-php` with no
   Forgejo repo behind it, in violation of this workspace's
   Forgejo-primary/GitHub-mirror hosting policy. Fixed as part of this audit:
