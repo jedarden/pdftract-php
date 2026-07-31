@@ -35,15 +35,33 @@ not the default Packagist registry.
   and a stub `Codegen\Methods` ("This class will be populated..."). It is
   not safe to finish or discard unilaterally without a decision on the
   target architecture — see ADR-1 below.
-- The committed `tests/ConformanceTest.php` (on `origin/main`) loads fixtures
+- ~~The committed `tests/ConformanceTest.php` (on `origin/main`) loads fixtures
   from `__DIR__ . '/../../../../tests/sdk-conformance/'`, a path that only
   resolves if this repo is checked out as a subdirectory of a `pdftract`
   monorepo. In the actual standalone `pdftract-php` repo that directory does
   not exist, so `setUp()` calls `$this->fail(...)` immediately — every test
-  in the shipped suite fails before it can run.
+  in the shipped suite fails before it can run.~~ Fixed 2026-07-30 (bead
+  `bf-1o3`): the conformance suite (`cases.json`, the JSON schemas, and every
+  fixture a case references) is vendored into `tests/sdk-conformance/` and the
+  test reads it via `__DIR__ . '/sdk-conformance'`, so the suite runs from a
+  plain clone. `tests/verify_psr3_logger.php` was carrying the same
+  `../../../../` assumption and now reads a vendored fixture too — it also
+  needed two fixes to run at all (its `TestLogger::log()` was `private`, which
+  is a fatal PSR-3 signature violation, and `getEntriesByLevel()` returned
+  `array_filter()`'s key-preserving result that callers then indexed with
+  `[0]`). See `tests/sdk-conformance/README.md` for provenance and
+  re-vendoring steps.
 - No CI is configured for this repo (no workflow files, and no
   `pdftract-php-build` entry among the fleet's Argo `WorkflowTemplate`s), so
-  the broken conformance suite above has never been caught by automation.
+  the conformance suite above had never been exercised by automation.
+- `./vendor/bin/phpunit` exits non-zero on a plain `composer install` checkout
+  even when all 85 tests pass: `phpunit.xml` sets `failOnWarning="true"` and
+  declares a `<coverage>` report, which raises a "No code coverage driver
+  available" runner warning on any machine without Xdebug or PCOV. The one-line
+  fix (drop the `<coverage>` block, or move it to a separate
+  `phpunit-coverage.xml`) is deliberately not applied here because `phpunit.xml`
+  is one of the files carrying the abandoned uncommitted work-in-progress
+  described above, and editing it would entangle the two changes.
 - `Client::extractText()`, `extractMarkdown()`, `extractStream()`,
   `search()`, and `verifyReceipt()` each hand-roll their own ~30-line
   `proc_open`/pipe-handling block instead of reusing the private `exec()`

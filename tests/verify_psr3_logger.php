@@ -68,10 +68,12 @@ class TestLogger implements \Psr\Log\LoggerInterface
         $this->log(LogLevel::DEBUG, $message, $context);
     }
 
-    private function log(string $level, \Stringable|string $message, array $context = []): void
+    // PSR-3 declares log() as public with an untyped $level; narrowing either
+    // is a fatal signature violation, so keep both as the interface has them.
+    public function log($level, \Stringable|string $message, array $context = []): void
     {
         $this->entries[] = [
-            'level' => $level,
+            'level' => (string)$level,
             'message' => (string)$message,
             'context' => $context,
         ];
@@ -84,7 +86,10 @@ class TestLogger implements \Psr\Log\LoggerInterface
 
     public function getEntriesByLevel(string $level): array
     {
-        return array_filter($this->entries, fn($e) => $e['level'] === $level);
+        // array_values(): array_filter() preserves the original keys, so
+        // callers indexing the result with [0] would hit an undefined key
+        // whenever the first matching entry is not the first entry logged.
+        return array_values(array_filter($this->entries, fn($e) => $e['level'] === $level));
     }
 
     public function clear(): void
@@ -157,13 +162,14 @@ printHeader("Test 2: Logger receives DEBUG logs for subprocess invocation");
 
 $logger->clear();
 
-// Try to execute a simple command
-$fixturePath = __DIR__ . '/../../../../tests/sdk-conformance/fixtures/hello.pdf';
+// Try to execute a simple command against a fixture vendored into this repo
+// (see tests/sdk-conformance/README.md) so this script runs standalone rather
+// than only inside a pdftract monorepo checkout.
+$fixturePath = __DIR__ . '/sdk-conformance/fixtures/code/code.pdf';
 if (!file_exists($fixturePath)) {
-    printWarning("Test fixture not found at $fixturePath");
-    printWarning("Creating minimal test PDF for verification...");
-    $fixturePath = '/tmp/test-verify.pdf';
-    // Create a minimal test command
+    printError("Vendored test fixture not found at $fixturePath");
+    printWarning("See tests/sdk-conformance/README.md for re-vendoring steps.");
+    exit(1);
 }
 
 try {
