@@ -346,6 +346,29 @@ class Client
     }
 
     /**
+     * Report a command that exited non-zero
+     *
+     * The child's stderr is the message when it wrote any; otherwise the
+     * command family names itself, so a silent failure is still attributable.
+     *
+     * @param string $cmd Command line
+     * @param string $what Human-readable label for the command family
+     * @param int $exitCode Exit code the child reported
+     * @param string $stderr Whatever the child wrote to stderr
+     * @return PdftractException
+     */
+    private function commandFailure(string $cmd, string $what, int $exitCode, string $stderr): PdftractException
+    {
+        $this->logger->error('pdftract ' . $what . ' failed', [
+            'command' => $cmd,
+            'exit_code' => $exitCode,
+            'stderr' => $stderr
+        ]);
+
+        return new PdftractException($stderr ?: ucfirst($what) . ' failed with no output', $exitCode);
+    }
+
+    /**
      * Run a pdftract command to completion, bounded by a wall-clock timeout
      *
      * stdout and stderr are drained concurrently so a child filling one pipe's
@@ -407,12 +430,7 @@ class Client
         }
 
         if ($exitCode !== 0) {
-            $this->logger->error('pdftract ' . $what . ' failed', [
-                'command' => $cmd,
-                'exit_code' => $exitCode,
-                'stderr' => $stderr
-            ]);
-            throw new PdftractException($stderr ?: 'Command failed with no output', $exitCode);
+            throw $this->commandFailure($cmd, $what, $exitCode, $stderr);
         }
 
         return $stdout;
@@ -500,12 +518,7 @@ class Client
             }
 
             if ($exitCode !== 0) {
-                $this->logger->error('pdftract ' . $what . ' failed', [
-                    'command' => $cmd,
-                    'exit_code' => $exitCode,
-                    'stderr' => $stderr
-                ]);
-                throw new PdftractException($stderr ?: 'Command failed with no output', $exitCode);
+                throw $this->commandFailure($cmd, $what, $exitCode, $stderr);
             }
         } finally {
             // Consumer abandoned the generator (or an error escaped): don't leak the child.
