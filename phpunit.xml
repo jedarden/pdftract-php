@@ -4,19 +4,10 @@
          bootstrap="vendor/autoload.php"
          colors="true"
          failOnRisky="true"
-         failOnWarning="true"
-         cacheDirectory=".phpunit.cache">
-  <testsuites>
-    <testsuite name="pdftract PHP SDK Tests">
-      <directory>tests</directory>
-    </testsuite>
-  </testsuites>
-  <coverage>
-    <report>
-      <html outputDirectory="coverage/html"/>
-    </report>
-  </coverage>
-  <php>
-    <env name="PDFTRACT_BINARY" value="pdftract"/>
-  </php>
+         failOnWarning="true">
+    <testsuites>
+        <testsuite name="pdftract">
+            <directory>tests</directory>
+        </testsuite>
+    </testsuites>
 </phpunit>
