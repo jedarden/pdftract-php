@@ -182,7 +182,10 @@ final class ClientBufferedRouteTest extends TestCase
      * markdown_anchors, pages); the dropped false/null entries and the
      * client-side 'timeout' option never reach the wire at all. The
      * retired CLI transport's --fast and --skip-text flags have no
-     * serve equivalent and must not creep back in as exemplars.
+     * serve equivalent and must not creep back in as exemplars. Two names
+     * in that list, file and pdf, are not forwardable at all: the client
+     * rejects an option that normalises to either, because the server reads
+     * both as the document upload — see the reserved-field cases below.
      */
     private const FORWARDABLE_OPTIONS = [
         'ocrLanguage' => 'eng',
@@ -958,6 +961,104 @@ final class ClientBufferedRouteTest extends TestCase
         }
 
         self::assertNull($this->server->lastRequest(), 'validation must happen before anything reaches the network');
+    }
+
+    // -------------------------------------------------- reserved upload fields
+
+    /**
+     * The document's own field names are not options
+     *
+     * receive_pdf() (pdftract-cli serve.rs) reads a part named 'file' *or*
+     * 'pdf' as the upload: its bytes must start with %PDF- or the request
+     * is rejected with a 400 before extraction is attempted — the server's
+     * unknown-field warning covers every name outside that pair, so a stray
+     * reserved field cannot be warned away, it fails the request. On this
+     * side the names are worse than stray: a 'file' option is silently
+     * overwritten by the upload assignment in curlHandle(). So the client
+     * refuses the option up front, the way takeTimeout() refuses an
+     * unusable timeout, and — because the check runs while the fields are
+     * still being built, before the handle executes — nothing at all
+     * reaches the network.
+     */
+    #[DataProvider('provideReservedUploadFieldOptions')]
+    public function test_an_option_named_for_the_document_upload_raises_a_configuration_exception(
+        string $optionKey,
+        string $reservedName,
+    ): void {
+        $client = new Client($this->server->baseUri());
+
+        $exception = null;
+
+        try {
+            $client->extract(Source::bytes(self::PDF_BYTES), [$optionKey => 'option text, not document bytes']);
+        } catch (ConfigurationException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, "an option named '{$optionKey}' must be rejected, not forwarded or dropped");
+        self::assertInstanceOf(PdftractException::class, $exception);
+        self::assertStringContainsString(
+            "'{$reservedName}'",
+            $exception->getMessage(),
+            'the message must name the reserved field the option would have landed in',
+        );
+        self::assertNull(
+            $this->server->lastRequest(),
+            'a rejected option must stop the request — nothing reserved may reach the wire',
+        );
+    }
+
+    public static function provideReservedUploadFieldOptions(): array
+    {
+        // 'Pdf' pins that the guard tests the normalised snake_case name,
+        // not the raw key — the same conversion that would have produced
+        // the stray field on the wire.
+        return [
+            'file' => ['file', 'file'],
+            'pdf' => ['pdf', 'pdf'],
+            'Pdf (camelCase variant)' => ['Pdf', 'pdf'],
+        ];
+    }
+
+    public function test_a_reserved_option_is_rejected_on_the_text_route_too(): void
+    {
+        $client = new Client($this->server->baseUri());
+
+        try {
+            $client->extractText(Source::bytes(self::PDF_BYTES), ['pdf' => 'option text, not document bytes']);
+            self::fail('a reserved option must be rejected on the text route too');
+        } catch (ConfigurationException $caught) {
+            self::assertStringContainsString("'pdf'", $caught->getMessage());
+        }
+
+        self::assertNull(
+            $this->server->lastRequest(),
+            'a rejected option must stop the request — nothing reserved may reach the wire',
+        );
+    }
+
+    public function test_a_reserved_option_is_rejected_when_the_stream_is_iterated(): void
+    {
+        // The streaming route builds its fields lazily, on first iteration,
+        // so that is when the guard fires. Iterating is also what a caller
+        // cannot skip: a generator that never threw would carry the
+        // reserved field onto the wire the moment it was consumed.
+        $client = new Client($this->server->baseUri());
+
+        try {
+            iterator_to_array(
+                $client->extractStream(Source::bytes(self::PDF_BYTES), ['file' => 'option text, not document bytes']),
+                false,
+            );
+            self::fail('a reserved option must be rejected on the streaming route too');
+        } catch (ConfigurationException $caught) {
+            self::assertStringContainsString("'file'", $caught->getMessage());
+        }
+
+        self::assertNull(
+            $this->server->lastRequest(),
+            'a rejected option must stop the request — nothing reserved may reach the wire',
+        );
     }
 
     // --------------------------------------------------------------- helpers

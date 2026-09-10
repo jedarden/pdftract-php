@@ -48,6 +48,22 @@ class Client
     /** Multipart field name the serve API reads the uploaded PDF from. */
     private const FILE_FIELD = 'file';
 
+    /**
+     * Multipart field names the serve API treats as the document upload
+     *
+     * receive_pdf() (pdftract-cli serve.rs) reads *either* name as the
+     * upload: the bytes of a part called 'file' or 'pdf' must start with
+     * %PDF- or the request is rejected outright with a 400 ("Uploaded file
+     * is not a PDF") before extraction is attempted — the server's
+     * unknown-field warning only covers names outside this pair. An option
+     * key that normalises to one of them can therefore neither ride the
+     * request as an ordinary field ('pdf' would be read as upload bytes and
+     * fail the magic-byte check) nor be quietly overwritten here ('file'
+     * would be silently replaced by the document). Both names are reserved,
+     * and an option that claims one is a configuration error, not a field.
+     */
+    private const RESERVED_UPLOAD_FIELDS = [self::FILE_FIELD, 'pdf'];
+
     private string $baseUrl;
     private ?string $apiKey;
     private LoggerInterface $logger;
@@ -94,8 +110,13 @@ class Client
      *                       (e.g. ['ocrLanguage' => 'eng', 'pages' => '1-5']),
      *                       forwarded to the server as multipart form fields.
      *                       The client-side 'timeout' option is popped and
-     *                       never forwarded.
+     *                       never forwarded. A key that normalises to the
+     *                       reserved upload field names 'file' or 'pdf' is
+     *                       rejected outright.
      * @return array Decoded JSON response with schema_version, metadata, pages
+     * @throws ConfigurationException If an option is unusable: a key
+     *                                normalises to a reserved upload field
+     *                                name, or the timeout is invalid
      * @throws PdftractException On server error or undecodable response
      * @throws TimeoutException If the request exceeds its timeout
      * @throws ConnectionException If the server cannot be reached
@@ -122,6 +143,8 @@ class Client
      * @param array $options Extraction options (see {@see Client::extract()})
      * @return string The response body verbatim: one extracted text span per
      *                line
+     * @throws ConfigurationException If an option is unusable (see
+     *                                {@see Client::extract()})
      * @throws PdftractException On server error
      * @throws TimeoutException If the request exceeds its timeout
      * @throws ConnectionException If the server cannot be reached
@@ -150,6 +173,9 @@ class Client
      *                           PDF bytes
      * @param array $options Extraction options (see {@see Client::extract()})
      * @return \Generator Yields decoded JSON records one at a time
+     * @throws ConfigurationException If an option is unusable (see
+     *                                {@see Client::extract()}); raised when
+     *                                the generator is first iterated
      * @throws PdftractException On server error
      * @throws TimeoutException If the stream stalls longer than the timeout
      * @throws ConnectionException If the server cannot be reached
@@ -245,19 +271,38 @@ class Client
      * false/absent, and the no_cache field means true by its mere presence,
      * so an explicit false must not be sent.
      *
+     * A key that normalises to one of the upload field names
+     * ({@see self::RESERVED_UPLOAD_FIELDS}) is rejected rather than dropped
+     * or overwritten: the server would read the stray field as the document
+     * itself, and this client would otherwise overwrite the caller's value
+     * in silence.
+     *
      * @param array $options Options with camelCase keys
      * @return array<string, string> Multipart form fields with snake_case keys
+     * @throws ConfigurationException If an option key normalises to a
+     *                                reserved upload field name
      */
     private function toFormFields(array $options): array
     {
         $fields = [];
 
         foreach ($options as $key => $value) {
+            $field = strtolower(preg_replace('/([A-Z])/', '_$1', lcfirst((string)$key)));
+
+            if (in_array($field, self::RESERVED_UPLOAD_FIELDS, true)) {
+                throw new ConfigurationException(
+                    sprintf(
+                        "option '%s' normalises to the reserved form field '%s', which carries the uploaded document",
+                        $key,
+                        $field,
+                    ),
+                );
+            }
+
             if ($value === null || $value === false) {
                 continue;
             }
 
-            $field = strtolower(preg_replace('/([A-Z])/', '_$1', lcfirst((string)$key)));
             $fields[$field] = is_bool($value) ? 'true' : (string)$value;
         }
 
