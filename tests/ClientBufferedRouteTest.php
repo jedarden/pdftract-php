@@ -409,7 +409,11 @@ final class ClientBufferedRouteTest extends TestCase
         // non-empty options are the only state in which the multipart body
         // has fields for the upload to ride alongside. Neither may disturb
         // the other — the fields stay exactly the forwarded set, so the path
-        // is not one of them, and the upload stays the file's bytes.
+        // is not one of them, and the upload stays the file's bytes. The
+        // query string is pinned empty too: this is the one case where a
+        // source path and options are both in play, and (bead
+        // pdfphp-7d075fea, by mutation) it was the only one of the four
+        // source/option combinations that still let a path ride there.
         $path = sys_get_temp_dir() . '/pdftract-buffered-' . bin2hex(random_bytes(4)) . '.pdf';
         file_put_contents($path, self::PDF_BYTES);
 
@@ -423,6 +427,11 @@ final class ClientBufferedRouteTest extends TestCase
             self::assertNotNull($request);
 
             self::assertSame(self::FORWARDED_FIELDS, $request->fields(), $request->describe());
+            self::assertSame(
+                '',
+                $request->queryString(),
+                'neither the source path nor an option may travel as a query string',
+            );
             $this->assertDocumentUpload($request);
         } finally {
             @unlink($path);
