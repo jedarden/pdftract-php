@@ -290,6 +290,36 @@ final class ClientBufferedRouteTest extends TestCase
         }
     }
 
+    public function test_the_api_key_header_is_a_bearer_header_when_a_key_is_configured(): void
+    {
+        // The header is built once for every request (src/Client.php
+        // headers()), so a key configured once must reach both buffered
+        // routes identically: the Bearer scheme, a single space, then the
+        // key exactly as given.
+        $key = 'pdftract-test-key-9f2c';
+
+        $this->server->enqueue(
+            ScriptedResponse::json('/extract', self::DOCUMENT),
+            ScriptedResponse::text('span', '/extract/text'),
+        );
+
+        $client = new Client($this->server->baseUri(), $key);
+        $client->extract(Source::bytes(self::PDF_BYTES));
+        $client->extractText(Source::bytes(self::PDF_BYTES));
+
+        $requests = $this->server->requests();
+
+        self::assertCount(2, $requests, 'both buffered routes must have been exercised');
+
+        foreach ($requests as $request) {
+            self::assertSame(
+                'Bearer ' . $key,
+                $request->authorization(),
+                "the configured key must travel as exactly 'Authorization: Bearer <key>' ({$request->describe()})",
+            );
+        }
+    }
+
     public function test_extract_forwards_options_as_the_only_snake_case_fields(): void
     {
         $this->server->enqueue(ScriptedResponse::json('/extract', self::DOCUMENT));
