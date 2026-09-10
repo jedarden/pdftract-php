@@ -381,10 +381,14 @@ final class ClientBufferedRouteTest extends TestCase
             // read, not how it is sent.
             $this->assertDocumentUpload($request);
 
-            // The path must not reach the server in any position: not as the
-            // part's content, not as the filename, and not as a sibling form
-            // field — the serve API reads documents out of uploads only.
+            // The path must not reach the server in any position (bead
+            // pdfphp-3a1ed8a2, by mutation: content, filename, sibling field
+            // and query string each detected): not as the part's content,
+            // not as the filename, not as a sibling form field, and not as
+            // a query string — the serve API reads documents out of uploads
+            // only.
             self::assertSame([], $request->fields(), 'the source path must not travel as a form field');
+            self::assertSame('', $request->queryString(), 'the source path must not travel as a query string');
             self::assertSame(
                 hash('sha256', self::PDF_BYTES),
                 $request->uploadedContentSha256(),
