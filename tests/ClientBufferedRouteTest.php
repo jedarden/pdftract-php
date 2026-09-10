@@ -235,8 +235,13 @@ final class ClientBufferedRouteTest extends TestCase
         self::assertSame('/extract', $request->path(), $request->describe());
         self::assertSame('', $request->queryString(), $request->describe());
         self::assertSame('Bearer secret-key', $request->authorization(), $request->describe());
-        self::assertStringStartsWith(
-            'multipart/form-data; boundary=',
+
+        // The declared type and a boundary that is actually present — not
+        // merely a "boundary=" parameter that could be empty. The router
+        // parses the body with PHP's multipart parser, so a missing or
+        // mismatched boundary also empties the uploads below.
+        self::assertMatchesRegularExpression(
+            '~^multipart/form-data; boundary=\S+~',
             (string)$request->contentType(),
             $request->describe(),
         );
@@ -262,8 +267,8 @@ final class ClientBufferedRouteTest extends TestCase
         self::assertSame('/extract/text', $request->path(), $request->describe());
         self::assertSame('', $request->queryString(), $request->describe());
         self::assertSame('Bearer secret-key', $request->authorization(), $request->describe());
-        self::assertStringStartsWith(
-            'multipart/form-data; boundary=',
+        self::assertMatchesRegularExpression(
+            '~^multipart/form-data; boundary=\S+~',
             (string)$request->contentType(),
             $request->describe(),
         );
