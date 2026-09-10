@@ -170,16 +170,17 @@ final class ClientBufferedRouteTest extends TestCase
     ];
 
     /**
-     * Options every buffered call must forward, and the multipart fields the
+     * Options every buffered call may take, and the multipart fields the
      * serve API must then receive
      *
-     * Shared by the two *_forwards_options tests so the routes cannot drift
-     * apart. Every option name here maps to a multipart field the serve API
-     * actually reads (pdftract serve's KNOWN_FIELDS: file, pdf, receipts,
-     * no_cache, full_render, max_decompress_gb, ocr_language, ocr_dpi,
-     * markdown_anchors, pages). The retired CLI transport's --fast and
-     * --skip-text flags have no serve equivalent and must not creep back in
-     * as exemplars.
+     * Pinned as a constant pair so the forwarding test asserts the exact
+     * field set against a named contract rather than re-writing both sides
+     * inline, where they could drift apart. Every option name here maps to
+     * a multipart field the serve API actually reads (pdftract serve's
+     * KNOWN_FIELDS: file, pdf, receipts, no_cache, full_render,
+     * max_decompress_gb, ocr_language, ocr_dpi, markdown_anchors, pages).
+     * The retired CLI transport's --fast and --skip-text flags have no
+     * serve equivalent and must not creep back in as exemplars.
      */
     private const FORWARDABLE_OPTIONS = [
         'ocrLanguage' => 'eng',
@@ -325,18 +326,7 @@ final class ClientBufferedRouteTest extends TestCase
         $this->server->enqueue(ScriptedResponse::json('/extract', self::DOCUMENT));
 
         $client = new Client($this->server->baseUri());
-        $client->extract(Source::bytes(self::PDF_BYTES), [
-            // Every name here is a multipart field the serve API actually
-            // reads (pdftract serve's KNOWN_FIELDS). The retired CLI
-            // transport's --fast and --skip-text flags have no serve
-            // equivalent and must not creep back in as exemplars.
-            'ocrLanguage' => 'eng',
-            'pages' => '1-3',
-            'fullRender' => true,
-            'noCache' => false,
-            'ocrDpi' => null,
-            'timeout' => 30,
-        ]);
+        $client->extract(Source::bytes(self::PDF_BYTES), self::FORWARDABLE_OPTIONS);
 
         $request = $this->server->lastRequest();
         self::assertNotNull($request);
@@ -346,9 +336,11 @@ final class ClientBufferedRouteTest extends TestCase
         // no_cache=false is load-bearing, because the server reads that
         // field as true by its mere presence, so an explicit false would
         // silently disable the cache; the client-side 'timeout' option is
-        // consumed, never forwarded.
+        // consumed, never forwarded. assertSame pins the whole map, so a
+        // forwarded unexpected field, a camelCase name, an explicit false
+        // or null, or a value mangled in transit fails too.
         self::assertSame(
-            ['ocr_language' => 'eng', 'pages' => '1-3', 'full_render' => 'true'],
+            self::FORWARDED_FIELDS,
             $request->fields(),
             $request->describe(),
         );
