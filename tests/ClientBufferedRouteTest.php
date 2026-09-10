@@ -338,10 +338,16 @@ final class ClientBufferedRouteTest extends TestCase
 
             $request = $this->server->lastRequest();
             self::assertNotNull($request);
-            self::assertSame(hash('sha256', self::PDF_BYTES), $request->uploadedContentSha256(), $request->describe());
+
+            // Reading from a file changes nothing about the wire: the upload
+            // must carry the same field, filename, media type, and byte count
+            // a bytes-backed source does — the source only decides what is
+            // read, not how it is sent.
+            $this->assertDocumentUpload($request);
+
             self::assertSame(
-                'document.pdf',
-                $request->uploadedFilename(),
+                hash('sha256', self::PDF_BYTES),
+                $request->uploadedContentSha256(),
                 'the client must upload the file bytes, not the path — as content or as filename',
             );
         } finally {
