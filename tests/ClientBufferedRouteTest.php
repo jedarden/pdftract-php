@@ -175,11 +175,13 @@ final class ClientBufferedRouteTest extends TestCase
      *
      * Pinned as a constant pair so the forwarding test asserts the exact
      * field set against a named contract rather than re-writing both sides
-     * inline, where they could drift apart. Every option name here maps to
-     * a multipart field the serve API actually reads (pdftract serve's
-     * KNOWN_FIELDS: file, pdf, receipts, no_cache, full_render,
-     * max_decompress_gb, ocr_language, ocr_dpi, markdown_anchors, pages).
-     * The retired CLI transport's --fast and --skip-text flags have no
+     * inline, where they could drift apart. Every name actually forwarded
+     * from here is one of the multipart fields the serve API reads
+     * (pdftract serve's KNOWN_FIELDS: file, pdf, receipts, no_cache,
+     * full_render, max_decompress_gb, ocr_language, ocr_dpi,
+     * markdown_anchors, pages); the dropped false/null entries and the
+     * client-side 'timeout' option never reach the wire at all. The
+     * retired CLI transport's --fast and --skip-text flags have no
      * serve equivalent and must not creep back in as exemplars.
      */
     private const FORWARDABLE_OPTIONS = [
