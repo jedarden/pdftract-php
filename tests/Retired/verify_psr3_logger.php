@@ -3,6 +3,32 @@
 declare(strict_types=1);
 
 /**
+ * SUPERSEDED — retired with the CLI subprocess transport. Never run this
+ * script against the canonical HTTP client.
+ *
+ * Partition rationale (2026-09-10): this script verified PSR-3 logging as it
+ * behaved under the proc_open transport — it looked the pdftract binary up in
+ * PATH via shell_exec(), handed its path to Client as a binary location, and
+ * exercised getMetadata(), none of which exist in the ADR-1 (docs/plan/
+ * plan.md) HTTP-client world: the serve API exposes no getMetadata route
+ * (bf-4bd) and the constructor takes a base URL, so `$logger` would land in
+ * the `?string $apiKey` parameter and the script would fatal immediately. Per
+ * bf-4gq the legacy suite was partitioned rather than deleted, so the script
+ * moved here from tests/verify_psr3_logger.php with the transport it drove.
+ *
+ * It is inert in the suite by construction: vendor/bin/phpunit only picks up
+ * *Test.php files, so this script is never executed — the point of keeping it
+ * is the record of what the CLI transport logged (DEBUG before each
+ * invocation, ERROR with exit code and stderr on failure), which the
+ * HTTP client's own suite must re-prove with curl equivalents. Do not run it
+ * against the HTTP client and do not "fix" it to pass there; when that
+ * coverage is written it belongs in a live test case, not in this record.
+ *
+ * To read this script as live code, check out a revision from before the
+ * ADR-1 HTTP-client migration (git log --follow -- tests/verify_psr3_logger.php).
+ *
+ * Original header (paths as they were):
+ *
  * PSR-3 Logger Verification Script
  *
  * This script demonstrates and verifies that the PHP SDK correctly integrates

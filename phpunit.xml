@@ -10,4 +10,35 @@
             <directory>tests</directory>
         </testsuite>
     </testsuites>
+    <!--
+      The legacy CLI-subprocess suite is partitioned, not deleted (bf-4gq):
+
+      - `pending-no-serve-route` (tests/ClientTest.php, tests/ClientTimeoutTest.php)
+        parks the cases for the six methods the serve API cannot reach (search,
+        getMetadata, hash, classify, verifyReceipt, extractMarkdown — bf-4bd) as
+        explicit skips, so the coverage intent stays visible. It runs and every
+        case reports a skip.
+      - `retired-cli-subprocess` (tests/Retired/) is the superseded subprocess
+        contract, retired with the CLI transport per ADR-1 (docs/plan/plan.md)
+        and kept as a record. It must never run against the HTTP client, so the
+        group is excluded from the default suite; the partition also skips
+        itself in setUp() if it is ever selected explicitly.
+
+      Gotcha: test listing (the list-tests option) ignores group filters and
+      will enumerate the 35 retired cases anyway; only a run applies the
+      exclusion.
+
+      Inertness is layered, not enforced by failure: every retired case also
+      skips itself in setUp(), so selecting the group explicitly still just
+      reports 35 skips — no case body ever executes. If both guards were
+      removed, those bodies would run against the canonical HTTP client's
+      classes (their deliberately unqualified names now resolve there),
+      which is exactly the outcome this partition exists to prevent. Treat
+      any change that lets a retired case execute as a regression.
+    -->
+    <groups>
+        <exclude>
+            <group>retired-cli-subprocess</group>
+        </exclude>
+    </groups>
 </phpunit>
