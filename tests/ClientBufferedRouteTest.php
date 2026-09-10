@@ -349,6 +349,13 @@ final class ClientBufferedRouteTest extends TestCase
             $request->fields(),
             $request->describe(),
         );
+
+        // "The only additional fields" means additional to the document: an
+        // options-bearing request must still carry the upload, exactly as an
+        // optionless one does. The server warns about unknown fields and
+        // ignores them, so nothing but this assertion catches a client that
+        // dropped the file part once it had fields to send.
+        $this->assertDocumentUpload($request);
         self::assertSame('', $request->queryString(), 'options travel as form fields, not as a query string');
     }
 
@@ -381,6 +388,33 @@ final class ClientBufferedRouteTest extends TestCase
                 $request->uploadedContentSha256(),
                 'the client must upload the file bytes, not the path — as content or as filename',
             );
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_a_file_source_with_options_sends_only_the_forwarded_fields_and_the_bytes(): void
+    {
+        // The two field-minimality guarantees interact: a file-backed source
+        // hands the client a path it could leak as a form field, and
+        // non-empty options are the only state in which the multipart body
+        // has fields for the upload to ride alongside. Neither may disturb
+        // the other — the fields stay exactly the forwarded set, so the path
+        // is not one of them, and the upload stays the file's bytes.
+        $path = sys_get_temp_dir() . '/pdftract-buffered-' . bin2hex(random_bytes(4)) . '.pdf';
+        file_put_contents($path, self::PDF_BYTES);
+
+        try {
+            $this->server->enqueue(ScriptedResponse::json('/extract', self::DOCUMENT));
+
+            $client = new Client($this->server->baseUri());
+            $client->extract(Source::file($path), self::FORWARDABLE_OPTIONS);
+
+            $request = $this->server->lastRequest();
+            self::assertNotNull($request);
+
+            self::assertSame(self::FORWARDED_FIELDS, $request->fields(), $request->describe());
+            $this->assertDocumentUpload($request);
         } finally {
             @unlink($path);
         }
