@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace Jedarden\Pdftract\Tests;
 
+use Jedarden\Pdftract\AuthenticationException;
 use Jedarden\Pdftract\Client;
 use Jedarden\Pdftract\ConfigurationException;
 use Jedarden\Pdftract\ConnectionException;
+use Jedarden\Pdftract\NotFoundException;
 use Jedarden\Pdftract\PdftractException;
+use Jedarden\Pdftract\RateLimitException;
 use Jedarden\Pdftract\TimeoutException;
+use Jedarden\Pdftract\ValidationException;
 use Jedarden\Pdftract\Source;
 use Jedarden\Pdftract\Tests\Support\LoopbackServer;
 use Jedarden\Pdftract\Tests\Support\RecordedRequest;
@@ -492,6 +496,7 @@ final class ClientBufferedRouteTest extends TestCase
         string $errorCode,
         string $message,
         ?string $hint,
+        string $exceptionClass,
     ): void {
         $this->server->enqueue(
             ScriptedResponse::error('/extract', $status, $errorCode, $message, $hint),
@@ -509,6 +514,11 @@ final class ClientBufferedRouteTest extends TestCase
 
         self::assertNotNull($exception, 'a non-2xx response must raise PdftractException');
         self::assertInstanceOf(PdftractException::class, $exception);
+        // get_class, not assertInstanceOf: the typed subclasses are
+        // PdftractExceptions too, so instanceof could not tell a 429
+        // RateLimitException from a base one. The status-to-class table is
+        // the contract (src/Client.php exceptionClassForStatus()).
+        self::assertSame($exceptionClass, get_class($exception), 'the status must map to its documented exception class');
         self::assertSame($status, $exception->getStatusCode(), 'the HTTP status must be preserved');
         self::assertSame($status, $exception->getCode(), 'the exception code carries the HTTP status');
         self::assertSame($errorCode, $exception->getErrorCode(), 'the serve API error code must be preserved');
@@ -524,12 +534,24 @@ final class ClientBufferedRouteTest extends TestCase
 
     public static function provideServerErrorResponses(): array
     {
+        // One row per mapped status of src/Client.php
+        // exceptionClassForStatus(), plus the unmapped 5xx family, which
+        // must stay on the base class. 401/403 and 429 come from an
+        // authenticating or quota-ing reverse proxy (the serve API has no
+        // auth or rate limiting of its own); 400/413/422 are the serve
+        // API's request-validation statuses (serve.rs: BAD_REQUEST,
+        // MISSING_FIELD, REQUEST_TOO_LARGE, ENCRYPTED, WRONG_PASSWORD,
+        // CORRUPT_PDF, EXTRACTION_ERROR, DECOMPRESSION_LIMIT).
         return [
-            '400 validation' => [400, 'INVALID_REQUEST', 'pages option is not a page range', 'use N or N-M'],
-            '404 not found' => [404, 'NOT_FOUND', 'no such document', null],
-            '429 rate limited' => [429, 'RATE_LIMITED', 'too many extraction requests', 'retry after the window'],
-            '500 server error' => [500, 'INTERNAL_ERROR', 'the extractor crashed on page 7', null],
-            '503 unavailable' => [503, 'UNAVAILABLE', 'pdftract is starting up', null],
+            '400 request validation' => [400, 'INVALID_REQUEST', 'pages option is not a page range', 'use N or N-M', ValidationException::class],
+            '401 unauthenticated' => [401, 'UNAUTHORIZED', 'missing or invalid api key', null, AuthenticationException::class],
+            '403 forbidden' => [403, 'FORBIDDEN', 'this key cannot use the extract route', null, AuthenticationException::class],
+            '404 not found' => [404, 'NOT_FOUND', 'no such document', null, NotFoundException::class],
+            '413 payload too large' => [413, 'REQUEST_TOO_LARGE', 'upload exceeds the configured limit', null, ValidationException::class],
+            '422 document rejected' => [422, 'ENCRYPTED', 'document requires a password', 'pass password', ValidationException::class],
+            '429 rate limited' => [429, 'RATE_LIMITED', 'too many extraction requests', 'retry after the window', RateLimitException::class],
+            '500 server error' => [500, 'INTERNAL_ERROR', 'the extractor crashed on page 7', null, PdftractException::class],
+            '503 unavailable' => [503, 'UNAVAILABLE', 'pdftract is starting up', null, PdftractException::class],
         ];
     }
 
@@ -550,6 +572,7 @@ final class ClientBufferedRouteTest extends TestCase
         }
 
         self::assertNotNull($exception, 'a non-2xx response must raise PdftractException on the text route too');
+        self::assertInstanceOf(ValidationException::class, $exception, 'a document rejection is a validation failure on the text route too');
         self::assertSame(422, $exception->getStatusCode());
         self::assertSame('ENCRYPTED', $exception->getErrorCode());
         self::assertStringContainsString('document requires a password', $exception->getMessage());
@@ -577,8 +600,12 @@ final class ClientBufferedRouteTest extends TestCase
 
         // A reverse proxy interposing its own error page must not be mistaken
         // for a serve-API error: the client reports the status and excerpts
-        // the raw body instead of inventing fields.
+        // the raw body instead of inventing fields. Every row here has an
+        // unmapped status, and an unmapped status stays on the base class
+        // whatever its body says — the class is picked by status alone, and
+        // none of 409/500/502 names a failure mode callers branch on.
         self::assertNotNull($exception, 'a non-2xx response must raise PdftractException even without an error body');
+        self::assertSame(PdftractException::class, get_class($exception), 'a foreign error body must stay on the base class');
         self::assertSame($status, $exception->getStatusCode());
         self::assertNull($exception->getErrorCode(), 'no serve-API error code can be read from a foreign body');
         self::assertNull($exception->getHint());
@@ -589,6 +616,7 @@ final class ClientBufferedRouteTest extends TestCase
     public static function provideNonJsonErrorBodies(): array
     {
         return [
+            '409 html conflict page' => [409, '<html><body>409 Conflict</body></html>'],
             '502 html proxy page' => [502, '<html><body>502 Bad Gateway</body></html>'],
             '500 empty body' => [500, ''],
             '502 truncated json' => [502, '{"error": "gateway'],

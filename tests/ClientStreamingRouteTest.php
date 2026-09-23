@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace Jedarden\Pdftract\Tests;
 
+use Jedarden\Pdftract\AuthenticationException;
 use Jedarden\Pdftract\Client;
 use Jedarden\Pdftract\ConnectionException;
+use Jedarden\Pdftract\NotFoundException;
 use Jedarden\Pdftract\PdftractException;
+use Jedarden\Pdftract\RateLimitException;
 use Jedarden\Pdftract\Source;
+use Jedarden\Pdftract\ValidationException;
 use Jedarden\Pdftract\Tests\Support\LoopbackServer;
 use Jedarden\Pdftract\Tests\Support\RecordedRequest;
 use Jedarden\Pdftract\Tests\Support\ScriptedResponse;
@@ -516,6 +520,7 @@ final class ClientStreamingRouteTest extends TestCase
         string $errorCode,
         string $message,
         ?string $hint,
+        string $exceptionClass,
     ): void {
         $this->server->enqueue(
             ScriptedResponse::error('/extract/stream', $status, $errorCode, $message, $hint),
@@ -535,6 +540,10 @@ final class ClientStreamingRouteTest extends TestCase
         }
 
         self::assertNotNull($exception, 'a non-2xx status must raise PdftractException on the stream route too');
+        // get_class, not assertInstanceOf: the stream route shares the
+        // buffered route's error builder (src/Client.php serverError()), so
+        // the same status-to-class table must hold here.
+        self::assertSame($exceptionClass, get_class($exception), 'the status must map to its documented exception class');
         self::assertSame($status, $exception->getStatusCode(), 'the HTTP status must be preserved');
         self::assertSame($status, $exception->getCode(), 'the exception code carries the HTTP status');
         self::assertSame($errorCode, $exception->getErrorCode(), 'the serve API error code must be preserved');
@@ -552,9 +561,17 @@ final class ClientStreamingRouteTest extends TestCase
 
     public static function provideStreamRejectedBeforeTheBody(): array
     {
+        // The same rows the buffered route's provider pins: the mapping
+        // lives in serverError(), shared by both routes, so a stream
+        // rejection must type identically — including staying on the base
+        // class for the unmapped 5xx.
         return [
-            '400 validation' => [400, 'INVALID_REQUEST', 'pages option is not a page range', 'use N or N-M'],
-            '500 server error' => [500, 'INTERNAL_ERROR', 'the extractor crashed on page 7', null],
+            '400 request validation' => [400, 'INVALID_REQUEST', 'pages option is not a page range', 'use N or N-M', ValidationException::class],
+            '401 unauthenticated' => [401, 'UNAUTHORIZED', 'missing or invalid api key', null, AuthenticationException::class],
+            '404 not found' => [404, 'NOT_FOUND', 'no such route', null, NotFoundException::class],
+            '422 document rejected' => [422, 'ENCRYPTED', 'document requires a password', 'pass password', ValidationException::class],
+            '429 rate limited' => [429, 'RATE_LIMITED', 'too many extraction requests', 'retry after the window', RateLimitException::class],
+            '500 server error' => [500, 'INTERNAL_ERROR', 'the extractor crashed on page 7', null, PdftractException::class],
         ];
     }
 
@@ -581,6 +598,7 @@ final class ClientStreamingRouteTest extends TestCase
         }
 
         self::assertNotNull($exception, 'a non-2xx stream response must raise even without an error body');
+        self::assertSame(PdftractException::class, get_class($exception), 'a foreign error body must stay on the base class');
         self::assertSame(502, $exception->getStatusCode());
         self::assertNull($exception->getErrorCode(), 'no serve-API error code can be read from a foreign body');
         self::assertStringContainsString('502', $exception->getMessage());

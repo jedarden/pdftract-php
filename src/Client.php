@@ -19,6 +19,13 @@ use Psr\Log\NullLogger;
  * - {@see Client::extractText()}  → POST /extract/text   (plain text)
  * - {@see Client::extractStream()}→ POST /extract/stream (NDJSON, streamed)
  *
+ * A non-2xx response raises the exception subclass its status maps to —
+ * authentication (401/403), not found (404), rate limiting (429), request
+ * validation (400/413/422) — carrying the server's {error, message, hint}
+ * fields; transport and configuration failures raise
+ * {@see TimeoutException}, {@see ConnectionException}, and
+ * {@see ConfigurationException}.
+ *
  * Every request is bounded by a timeout so a hung server or a stalled
  * stream cannot block the calling PHP process indefinitely:
  *
@@ -462,8 +469,11 @@ class Client
      * interposing its own error page, for instance), the raw body is
      * excerpted into the message instead.
      *
+     * The status picks the exception class ({@see self::exceptionClassForStatus()});
+     * the fields the server sent travel on it unchanged.
+     *
      * @param array{status: int, body: string, url: string} $response Response parts
-     * @return PdftractException
+     * @return PdftractException The most specific subclass the status maps to
      */
     private function serverError(array $response): PdftractException
     {
@@ -487,7 +497,40 @@ class Client
             'error' => $errorCode,
         ]);
 
-        return new PdftractException($message, $response['status'], $errorCode, $hint);
+        $class = self::exceptionClassForStatus($response['status']);
+
+        return new $class($message, $response['status'], $errorCode, $hint);
+    }
+
+    /**
+     * The exception class a response status maps to
+     *
+     * Statuses with a failure mode callers branch on get their own
+     * exception: 401/403 an {@see AuthenticationException} (the serve API
+     * has no auth of its own, so these come from a proxy), a 404 a
+     * {@see NotFoundException}, a 429 a {@see RateLimitException}, and the
+     * serve API's request-validation statuses — 400 and 413 for
+     * request-shape rejections, 422 for a document it cannot process — a
+     * {@see ValidationException}. Everything else (the 5xx family, a
+     * proxy's stray 4xx) stays on the base class, whose fields still carry
+     * whatever the server sent.
+     *
+     * The status alone picks the class — the body's shape never does. A
+     * foreign body under a mapped status (a proxy's HTML 404 page) still
+     * raises that status's subclass, carrying the excerpted body as its
+     * message and no error code or hint.
+     *
+     * @return class-string<PdftractException>
+     */
+    private static function exceptionClassForStatus(int $status): string
+    {
+        return match ($status) {
+            401, 403 => AuthenticationException::class,
+            404 => NotFoundException::class,
+            429 => RateLimitException::class,
+            400, 413, 422 => ValidationException::class,
+            default => PdftractException::class,
+        };
     }
 
     /**

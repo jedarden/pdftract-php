@@ -10,8 +10,16 @@ namespace Jedarden\Pdftract;
  * This is the base class for every exception the client raises. Failures
  * reported by the pdftract server (a non-2xx response carrying the serve
  * API's {error, message, hint} JSON body) surface the server's fields
- * directly; transport-level failures (connection refused, DNS, timeouts)
- * use the {@see ConnectionException} and {@see TimeoutException} subclasses.
+ * directly, on this class or — for the statuses with a failure mode
+ * callers branch on — the {@see AuthenticationException},
+ * {@see NotFoundException}, {@see RateLimitException}, and
+ * {@see ValidationException} subclasses; transport-level failures
+ * (connection refused, DNS, timeouts) use the {@see ConnectionException}
+ * and {@see TimeoutException} subclasses.
+ *
+ * {@see EncodingException}, {@see IOException}, and {@see ParseException}
+ * complete the ported hierarchy as homes for encoding, filesystem, and
+ * parse failures; the client does not raise them yet.
  */
 class PdftractException extends \Exception
 {
