@@ -58,6 +58,22 @@ use PHPUnit\Framework\TestCase;
  * (tests/LoopbackServerTest.php); the behavioural coverage — record order,
  * idle-timeout semantics, error mapping, request shape — lives here.
  *
+ * The request-shape section below is the port of the buffered suite's
+ * request-shape program (bead pdfphp-5bd02a6a, 2026-09-25): serve reads one
+ * multipart contract on every POST route — receive_pdf() is called by all
+ * three handlers (extract serve.rs:536, extract_text serve.rs:617,
+ * extract_stream serve.rs:705), so the streamed route's request surface is
+ * the buffered routes': the document in the serve API's field with the
+ * fixed filename and exact bytes, the Authorization Bearer header exactly
+ * when a key is configured, options forwarded as the only snake_case
+ * fields, and a file path reaching the server in no position. The two
+ * cases the buffered suite holds for the stream route itself — the
+ * reserved-upload-field guard and its lazy, on-first-iteration timing —
+ * stay in tests/ClientBufferedRouteTest.php
+ * (test_a_reserved_option_is_rejected_when_the_stream_is_iterated); the
+ * one route-specific request header, the NDJSON Accept, is pinned by the
+ * multipart test below.
+ *
  * Idle-vs-wall-clock distinction: the buffered suites
  * (tests/ClientBufferedRouteTest.php) bound a request with curl's total
  * transfer deadline, so a response that takes longer than the bound fails
@@ -264,6 +280,99 @@ final class ClientStreamingRouteTest extends TestCase
             self::assertSame(self::FORWARDED_FIELDS, $request->fields(), $request->describe());
             self::assertSame('', $request->queryString(), 'neither the source path nor an option may ride the query string');
             $this->assertDocumentUpload($request);
+        } finally {
+            @unlink($path);
+        }
+    }
+
+    public function test_the_stream_route_sends_no_authorization_header_without_a_configured_key(): void
+    {
+        // The absent half of the buffered suite's Authorization pin, on the
+        // stream route: without a configured key the client must send no
+        // Authorization header at all — an empty-value or anonymous-scheme
+        // header fails this too, and an authenticating proxy in front of
+        // the serve API would treat either as a bad credential.
+        $this->server->enqueue(
+            ScriptedResponse::ndjson('/extract/stream', $this->ndjsonLines([self::PAGE_RECORDS[0]])),
+        );
+
+        $client = new Client($this->server->baseUri());
+        iterator_to_array($client->extractStream(Source::bytes(self::PDF_BYTES)), false);
+
+        $request = $this->server->lastRequest();
+        self::assertNotNull($request, 'the request never reached the loopback server');
+
+        self::assertNull(
+            $request->authorization(),
+            "the client must not send an Authorization header on the stream route without a configured key ({$request->describe()})",
+        );
+    }
+
+    public function test_extract_stream_forwards_options_as_the_only_snake_case_fields(): void
+    {
+        // The buffered suite's options-forwarding pin, re-held on the stream
+        // route with a bytes-backed source (the file-backed variant is the
+        // interaction test above): camelCase options become the serve API's
+        // snake_case fields and are the only fields — no unexpected name, no
+        // camelCase leakage, explicit false and null dropped (no_cache=false
+        // is load-bearing: the server reads that field as true by its mere
+        // presence), the client-side 'timeout' option consumed and never
+        // forwarded, values unmangled in transit. assertSame pins the whole
+        // map, and an options-bearing request must still carry the upload —
+        // the server warns about unknown fields and ignores them, so only
+        // this catches a client that dropped the file part once it had
+        // fields to send.
+        $this->server->enqueue(
+            ScriptedResponse::ndjson('/extract/stream', $this->ndjsonLines([self::PAGE_RECORDS[0]])),
+        );
+
+        $client = new Client($this->server->baseUri());
+        iterator_to_array(
+            $client->extractStream(Source::bytes(self::PDF_BYTES), self::FORWARDABLE_OPTIONS),
+            false,
+        );
+
+        $request = $this->server->lastRequest();
+        self::assertNotNull($request);
+
+        self::assertSame(self::FORWARDED_FIELDS, $request->fields(), $request->describe());
+        $this->assertDocumentUpload($request);
+        self::assertSame('', $request->queryString(), 'options travel as form fields, not as a query string');
+    }
+
+    public function test_a_file_source_uploads_the_file_bytes_to_the_stream_route(): void
+    {
+        // The buffered suite's optionless file-Source pin, re-held on the
+        // stream route: reading from a file changes nothing about the wire —
+        // the upload carries the same field, filename, media type, and byte
+        // count a bytes-backed source does — and the path reaches the server
+        // in no position: not as the part's content, not as the filename,
+        // not as a sibling form field, and not as a query string. The
+        // optionless case matters because it is the only one whose body has
+        // no fields for a stray sibling field to hide among.
+        $path = sys_get_temp_dir() . '/pdftract-streaming-' . bin2hex(random_bytes(4)) . '.pdf';
+        file_put_contents($path, self::PDF_BYTES);
+
+        try {
+            $this->server->enqueue(
+                ScriptedResponse::ndjson('/extract/stream', $this->ndjsonLines([self::PAGE_RECORDS[0]])),
+            );
+
+            $client = new Client($this->server->baseUri());
+            iterator_to_array($client->extractStream(Source::file($path)), false);
+
+            $request = $this->server->lastRequest();
+            self::assertNotNull($request);
+
+            $this->assertDocumentUpload($request);
+
+            self::assertSame([], $request->fields(), 'the source path must not travel as a form field');
+            self::assertSame('', $request->queryString(), 'the source path must not travel as a query string');
+            self::assertSame(
+                hash('sha256', self::PDF_BYTES),
+                $request->uploadedContentSha256(),
+                'the client must upload the file bytes, not the path — as content or as filename',
+            );
         } finally {
             @unlink($path);
         }
