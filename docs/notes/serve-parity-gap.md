@@ -188,6 +188,39 @@ Consequence for the amendment: either author the schema by hand from
 OpenAPI surface to `pdftract --serve` upstream first. The ADR-1 amendment
 should not cite a schema that does not exist.
 
+## Addendum 2026-09-23 — the extract fingerprint is not the `hash` subcommand's value
+
+Follow-up static finding, same upstream revision (`eeab77e`, still HEAD on
+2026-09-23). It sharpens the `hash` row above from "no route" to "no route,
+and the closest embedded value is a *different fingerprint*":
+
+- What `POST /extract` embeds as `fingerprint` (`serve.rs:580`) is computed
+  by `compute_fingerprint_lazy` (`pdftract-core/src/document.rs:695`,
+  definition `document.rs:1597-1635`), which hashes **catalog-level data
+  only**: its `FingerprintInput` carries `page_count: 0` and
+  `pages: vec![]` (`document.rs:1617-1618`) — "The full fingerprint
+  computation requires page content streams" (`document.rs:1594-1595`).
+- What the CLI's `pdftract hash` prints (`hash.rs:300-327`) is computed from
+  `build_fingerprint_input`, which materializes the page tree and hashes
+  per-page data with a real `page_count` (`hash.rs:250-300`).
+
+Both call `pdftract_core::fingerprint::compute_fingerprint`
+(`fingerprint/mod.rs:140`), but over different inputs, so the two values
+diverge for any document with pages. Consequence for ADR-1: an SDK `hash()`
+derived from the `POST /extract` response would silently return a different
+fingerprint than the CLI method it replaced — the parity question for `hash`
+is not only "no route" but "no route *and* no equivalent value in any serve
+response". A `hash()` port would additionally need upstream to expose the
+full fingerprint (or the SDK to ship a PHP reimplementation of the page-tree
+hash, which is out of scope for a client whose ADR-1 charter is transport,
+not crypto/renderer, reimplementation).
+
+Side finding: the retired CLI wrapper's `hash()` docblock advertised
+`'hash'`/`'fast_hash'` keys (`src/Pdftract/Client.php:726-728`), but
+`run_hash` prints a single bare fingerprint line (`hash.rs:308, 323`) —
+one more entry for bead `bf-1s2`'s catalogue of wrapper contracts that do
+not match the real binary.
+
 ## Ancillary finding — serve cannot process encrypted PDFs
 
 `ExtractParams` (`serve.rs:211-228`) and the `receive_pdf` field list
