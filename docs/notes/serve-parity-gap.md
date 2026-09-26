@@ -12,10 +12,13 @@
   and `Cargo.toml` are byte-identical to that SHA (`git diff HEAD --stat` empty for
   those files); `pdftract-core/src/extract.rs` is dirty upstream, so its citation
   was verified against `git show HEAD:` content and uses the HEAD line number.
-- **No runtime/empirical claims are made here.** Whether the covered routes
-  behave identically to the CLI, and whether the `markdown_anchors` flag has any
-  observable effect on a serve response, are matters for the conformance work
-  (next split child). This file is the route inventory the ADR-1 amendment rests on.
+- **No runtime/empirical claims were made in the original audit.** Whether the
+  covered routes behave identically to the CLI, and whether the `markdown_anchors`
+  flag has any observable effect on a serve response, were deferred to the
+  conformance work. The `markdown_anchors` question has since been answered
+  empirically — see **Addendum 2026-09-26** below; the route-level behavioural
+  parity of the covered routes is still untested. This file is the route
+  inventory the ADR-1 amendment rests on.
 
 ## The commitment being evidenced
 
@@ -63,7 +66,7 @@ empirical check pending.
 |---|---|---|---|---|---|
 | 1 | `extract` | `pdftract extract` + `--json` / `--format json` | `POST /extract` | COVERED | CLI: `cli.rs:71`, `--json` `cli.rs:91-93`, `--format` `cli.rs:107-109`, dispatch `main.rs:587`. Serve: `serve.rs:408-411`, handler `serve.rs:531`, body via `result_to_json` `serve.rs:583`, `Content-Type: application/json` `serve.rs:587` |
 | 2 | `extractText` | `pdftract extract` + `--text` / `--format text` | `POST /extract/text` | COVERED | CLI: `--text` `cli.rs:99-101`, text arm `main.rs:1400-1405` (`serialize_document_text` at `main.rs:1403`). Serve: `serve.rs:412`, handler `serve.rs:612`, response `serve.rs:665-672` |
-| 3 | `extractMarkdown` | `pdftract extract` + `--md` / `--format markdown` (+ `--md-anchors`, `--md-no-page-breaks`) | none — closest is a `markdown_anchors` multipart flag | **OPEN** | CLI: `--md` `cli.rs:95-97`, `--md-anchors` `cli.rs:139-141`, `--md-no-page-breaks` `cli.rs:143-145`, `Format::Markdown` arm `main.rs:1406-1443` (renderer `page_to_markdown_with_links_and_footnotes` at `main.rs:1433`). Serve: flag parsed `serve.rs:807, 879-885`, plumbed `serve.rs:991` — see gap detail below |
+| 3 | `extractMarkdown` | `pdftract extract` + `--md` / `--format markdown` (+ `--md-anchors`, `--md-no-page-breaks`) | none — closest is a `markdown_anchors` multipart flag, empirically inert (Addendum 2026-09-26) | **GAP** | CLI: `--md` `cli.rs:95-97`, `--md-anchors` `cli.rs:139-141`, `--md-no-page-breaks` `cli.rs:143-145`, `Format::Markdown` arm `main.rs:1406-1443` (renderer `page_to_markdown_with_links_and_footnotes` at `main.rs:1433`). Serve: flag parsed `serve.rs:807, 879-885`, plumbed `serve.rs:991` — see gap detail below and Addendum 2026-09-26 |
 | 4 | `extractStream` | `pdftract extract --ndjson` | `POST /extract/stream` | COVERED | CLI: `--ndjson` `cli.rs:103-105`. Serve: `serve.rs:413`, handler `serve.rs:698`, `extract_pdf_ndjson` `serve.rs:745`, `Content-Type: application/x-ndjson` `serve.rs:768` |
 | 5 | `search` | `pdftract grep` (itself feature-gated, non-default) | none | GAP | CLI: `cli.rs:208-210` (`#[cfg(feature = "grep")]`), dispatch `main.rs:692`, feature `grep = ["dep:indicatif"]` `Cargo.toml:134` with `default = []` `Cargo.toml:118`. Serve: absent from `serve.rs:406-414` |
 | 6 | `getMetadata` | no dedicated subcommand — metadata rides `extract --json` output | none (metadata only embedded in the `POST /extract` full response) | GAP | CLI: no `Commands` variant other than `Extract` carries metadata (`cli.rs:29-442`); `"metadata"` key in `result_to_json`, `pdftract-core/src/extract.rs:1575`. Serve: `serve.rs:576-583` |
@@ -72,11 +75,13 @@ empirical check pending.
 | 9 | `verifyReceipt` | `pdftract verify-receipt` | none | GAP | CLI: `cli.rs:213-214`, dispatch `main.rs:742`. Serve: absent from `serve.rs:406-414` |
 
 Score: **3 of 9 covered** (extract, extractText, extractStream), **6 of 9 not
-covered** (5 absent routes; extractMarkdown open pending the empirical check).
+covered** (6 absent routes; extractMarkdown's only serve-side gesture — the
+`markdown_anchors` flag — is empirically inert on all three POST routes,
+Addendum 2026-09-26).
 
 ## Gap detail — what the CLI offers that serve does not
 
-### `extractMarkdown` — OPEN
+### `extractMarkdown` — GAP (empirically settled 2026-09-26)
 
 What the CLI offers: a full markdown rendering pipeline —
 `Format::Markdown` (`main.rs:1406-1443`) renders each page through
@@ -92,19 +97,22 @@ emits `pages[].{index,spans,blocks,tables}`, `fingerprint`, `metadata`,
 `POST /extract/text` concatenates raw span text (`serve.rs:657-663`), never
 calling any `page_to_markdown*` renderer.
 
-Why the row is OPEN, not GAP: every POST route accepts a `markdown_anchors`
+Why the row is GAP, not OPEN: every POST route accepts a `markdown_anchors`
 multipart flag (doc `serve.rs:785`; parsed `serve.rs:807, 879-885`; plumbed
 into `ExtractionOptions` at `serve.rs:991`; field defined
 `pdftract-core/src/options.rs:331`). Statically, the flag's only reader in the
 tree is the CLI's markdown arm (`main.rs:1186-1187, 1408`) — `result_to_json`
-does not consume it — so no serve response should be markdown-rendered. But
-static reading is not the evidentiary bar for closing a parity row, and one
-premise in the split task needs correcting: the flag is accepted on **all three
-POST routes**, not two — `receive_pdf` is called by `extract_handler`
+does not consume it — so no serve response should be markdown-rendered. Static
+reading alone was not the evidentiary bar for closing a parity row, and one
+premise in the split task needed correcting: the flag is accepted on **all
+three POST routes**, not two — `receive_pdf` is called by `extract_handler`
 (`serve.rs:536`), `extract_text_handler` (`serve.rs:617`), and
-`extract_stream_handler` (`serve.rs:705`). **The empirical check (next split
-child) should exercise all three routes with `markdown_anchors=true` and
-compare against CLI `--md --md-anchors` output. No verdict is recorded here.**
+`extract_stream_handler` (`serve.rs:705`). The empirical check has since been
+run against all three routes (Addendum 2026-09-26): responses are
+byte-identical with the flag omitted, `true`, `false`, or set to a garbage
+value, and no serve response ever carries markdown or anchor markup. **Verdict:
+the flag is accepted but inert over HTTP — unobservable in any serve response.
+The row is GAP. See Addendum 2026-09-26 for the evidence.**
 
 ### `search` — GAP
 
@@ -220,6 +228,81 @@ Side finding: the retired CLI wrapper's `hash()` docblock advertised
 `run_hash` prints a single bare fingerprint line (`hash.rs:308, 323`) —
 one more entry for bead `bf-1s2`'s catalogue of wrapper contracts that do
 not match the real binary.
+
+## Addendum 2026-09-26 — the `markdown_anchors` serve flag is accepted but inert (empirical)
+
+This records the empirical verdict the original audit deferred. Same upstream
+revision (`eeab77e`). Bead: `pdfphp-f16b41ae`.
+
+**Binary provenance.** The probe served from a release build of a tree that is
+byte-identical to upstream `eeab77e` (`cli.rs`, `main.rs`, `options.rs`,
+`Cargo.toml` compared byte-for-byte against `git show eeab77e:` content) with
+**one disclosed deviation**: `serve.rs`'s two `axum::serve` call sites were
+changed to `into_make_service_with_connect_info::<std::net::SocketAddr>`.
+Without it the `audit_middleware` `ConnectInfo` extractor
+(`middleware/audit.rs:102-103`) panics every request into a 500 and no POST is
+provable at all; the patch touches only service construction — no extraction,
+routing, or serialisation code. The unpatched binary was separately confirmed
+to return an identical 500 on every request, i.e. the patch changes nothing
+about any successful response other than making them exist.
+
+**Upstream blocker, disclosed.** At `eeab77e` extraction fails for *every*
+document on *every* available build: `LazyPageIter`'s first page error is
+swallowed at `pdftract-core/src/extract.rs:746-752` (`Some(Err(_)) | None =>
+break`) and surfaces as `EXTRACTION_ERROR`/"Document contains no pages". The
+with/without comparison therefore runs over the routes' **error** responses.
+That limitation is closed by the static half of the verdict: no successful
+serve response could consult the flag either, because its only reader in the
+tree is the CLI markdown arm (`main.rs:1187` sets it, `main.rs:1408` reads it,
+inside `Format::Markdown` — unreachable from `serve.rs`); `result_to_json`,
+the text serialiser, and the NDJSON serialiser never touch it.
+
+**What was run.** Vendored conformance fixtures (`invoice/01.pdf`,
+`contract/01.pdf`, `misc/01.pdf` from `tests/sdk-conformance/fixtures/`)
+POSTed to all three POST routes with `markdown_anchors` omitted, `=true`,
+`=false`, and `=banana` (garbage value), plus a repeat-omit for determinism and
+a `totally_unknown=1` field as recognition control; byte-compared all pairs.
+CLI contrast with the same binary and fixtures: `extract --md -` vs
+`extract --md - --md-anchors`.
+
+**Results.**
+
+- 48 serve responses collapse to exactly **2 distinct bodies**: the
+  `POST /extract` and `/extract/text` 422 JSON error
+  (`{"error":"EXTRACTION_ERROR","message":"Document contains no pages"}`, 67 B)
+  and the `/extract/stream` 200 NDJSON error line
+  (`{"error":"Document contains no pages"}`, 39 B). Every paired comparison —
+  omit vs `true`, `false`, `banana`, repeat-omit, per fixture, per route — is
+  **byte-identical**. A garbage value is silently coerced
+  (`parse_bool(...).unwrap_or(false)`, `serve.rs:879-885`), never rejected.
+- **No response body contains anchor markup** (`<!-- pdftract:`) or mentions
+  the flag in any variant.
+- Recognition control: `totally_unknown` produces the
+  `Unknown multipart field 'totally_unknown' ignored` WARN
+  (`serve.rs` logs the known-field list, which names `markdown_anchors`);
+  `markdown_anchors` itself never WARNs. So the flag *is* parsed and accepted —
+  the only observable trace of sending it, and even that trace is in the
+  server log, not the response.
+- CLI contrast: `--md-anchors` demonstrably flows on the CLI surface — the
+  binary prints `Markdown anchors enabled` to stderr only when the flag is set
+  (`main.rs:1187`→`1408` path is reached) — but output is `rc=1`, 0 bytes at
+  this revision for every fixture, from the same upstream extraction bug. The
+  flag demonstrably *does* something on the CLI markdown path and demonstrably
+  has *no* consumer on any serve path.
+
+**Verdict.** The `markdown_anchors` multipart field is **accepted but inert
+over HTTP**: no serve response varies with it at the pinned revision, and no
+serve response could, statically, at any revision with this code shape. The
+matrix row 3 status OPEN → **GAP** is thereby evidenced: there is no markdown
+representation of any response available over serve at `eeab77e`.
+
+**Consequence for option-forwarding callers** (the `pdfphp-e27d7b93`
+forwarded-fields pins): a client that forwards `markdown_anchors` as a
+multipart field gets it accepted (no error, no warning surfaced in the
+response) and nothing else — it is a dead option over HTTP until upstream adds
+a markdown serve representation. The SDK should not promise, document, or test
+any behavioural effect of `markdown_anchors` on a serve response; the
+`Client::extract()` forwarding docblock records this.
 
 ## Ancillary finding — serve cannot process encrypted PDFs
 

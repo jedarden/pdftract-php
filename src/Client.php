@@ -119,7 +119,12 @@ class Client
      *                       The client-side 'timeout' option is popped and
      *                       never forwarded. A key that normalises to the
      *                       reserved upload field names 'file' or 'pdf' is
-     *                       rejected outright.
+     *                       rejected outright. Forwarding is verbatim and
+     *                       does not imply effect: 'markdown_anchors' is
+     *                       accepted by every POST route yet inert — no
+     *                       serve response varies with it (upstream eeab77e;
+     *                       see docs/notes/serve-parity-gap.md, Addendum
+     *                       2026-09-26).
      * @return array Decoded JSON response with schema_version, metadata, pages
      * @throws ConfigurationException If an option is unusable: a key
      *                                normalises to a reserved upload field
