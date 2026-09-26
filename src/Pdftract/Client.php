@@ -42,6 +42,15 @@ class Client
     /** How long a timed-out child gets to exit on SIGTERM before SIGKILL. */
     private const KILL_GRACE_SECONDS = 2.0;
 
+    /**
+     * What hash() accepts as one fingerprint line: a version prefix, a
+     * colon, then 64 lowercase hex. Upstream's INV-13 pins today's output
+     * to `^pdftract-v1:[0-9a-f]{64}$`; the pattern here deliberately
+     * accepts the version-prefixed family so a future v2 fingerprint does
+     * not turn every hash() into a wrapper error.
+     */
+    private const FINGERPRINT_PATTERN = '/^pdftract-v[0-9]+:[0-9a-f]{64}$/';
+
     /** Read chunk size when draining child pipes. */
     private const READ_CHUNK_BYTES = 65536;
 
@@ -720,19 +729,54 @@ class Client
     }
 
     /**
-     * Compute hash of a PDF
+     * Compute the structural fingerprint of a PDF
+     *
+     * Shells out to `pdftract hash`, which on success prints the fingerprint
+     * as a single bare line — a version prefix, then a colon, then a
+     * 64-character lowercase hex digest, e.g. "pdftract-v1:ab24a95f…"
+     * (upstream `run_hash` is a plain `println!`; the subcommand has no
+     * --json flag). The current upstream version prefix is `pdftract-v1`,
+     * pinned by upstream's own INV-13 invariant `^pdftract-v1:[0-9a-f]{64}$`
+     * (fingerprint/mod.rs:23, 976); the validation below accepts the
+     * version-prefixed family rather than hardcoding v1, while the
+     * conformance pin (tests/ClientHashConformanceTest.php) holds today's
+     * binary to INV-13 exactly. The historical contract in this docblock —
+     * a decoded object with 'hash' and 'fast_hash' keys, settable via a
+     * 'fast' option — never existed upstream, so the previous exec()-based
+     * implementation threw "Failed to decode JSON output" on every
+     * successful hash (bead pdfphp-ee8d6dbd; falsifying evidence in
+     * docs/notes/serve-parity-gap.md, addendum side-finding).
      *
      * @param mixed $source Source object or path string
-     * @param array $options Options (e.g., ['fast' => true, 'timeout' => 5])
-     * @return array Hash data with 'hash' and 'fast_hash' keys
-     * @throws PdftractException On command failure or timeout
+     * @param array $options Options: 'timeout' bounds the call (as with every
+     *                       method); anything else becomes a subcommand flag,
+     *                       and `hash` only accepts --password (rejected by
+     *                       upstream unless PDFTRACT_INSECURE_CLI_PASSWORD=1)
+     *                       and repeatable --header
+     * @return array Hash data with a single 'hash' key holding the full
+     *              fingerprint line as printed, version prefix included
+     * @throws PdftractException On command failure, timeout, or output that
+     *                           is not a single fingerprint line
      */
     public function hash($source, array $options = []): array
     {
         $timeout = $this->takeTimeout($options, $this->quickTimeoutSeconds);
         $args = array_merge(['hash'], $this->buildArgs($source, $options));
+        $fingerprint = trim($this->run($args, $timeout, 'hash command'));
 
-        return $this->exec($args, $timeout);
+        if (preg_match(self::FINGERPRINT_PATTERN, $fingerprint) !== 1) {
+            $this->logger->error('pdftract hash command returned unexpected output', [
+                'command' => $this->buildCommand($args),
+                'output' => $fingerprint,
+            ]);
+            throw new PdftractException(
+                'Unexpected output from hash command: '
+                . (strlen($fingerprint) > 200 ? substr($fingerprint, 0, 200) . '…' : $fingerprint),
+                -1
+            );
+        }
+
+        return ['hash' => $fingerprint];
     }
 
     /**
