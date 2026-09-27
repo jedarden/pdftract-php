@@ -712,6 +712,95 @@ final class ClientStreamingRouteTest extends TestCase
         self::assertSame([self::PAGE_RECORDS[0]], $records);
     }
 
+    public function test_the_serve_mid_extraction_error_event_is_surfaced_verbatim(): void
+    {
+        // The error record serve.rs actually writes (pinned revision
+        // eeab77e, captured from the probe build — see
+        // docs/notes/serve-parity-gap.md, Addendum 2026-09-27d): a
+        // mid-extraction failure travels in-band as a final newline-
+        // terminated {"error": <Debug-formatted anyhow chain>} record
+        // (serve.rs:745-754, format!("{:?}", e) at 748) under a committed
+        // 200 application/x-ndjson response (serve.rs:765-766) — the one
+        // place the stream route deliberately diverges from the buffered
+        // routes' 422. The client surfaces the decoded chain as the
+        // exception message verbatim (src/Client.php decodeRecord()), so
+        // the multi-line text, real newlines and all, must arrive
+        // byte-identical, on the base class with no status (nothing failed
+        // at the HTTP layer), no error code and no hint (the record has
+        // neither field). The harness writes the same wire bytes the probe
+        // captured (transcript-errors/post-stream-extract-error.http).
+        $chain = "Failed to find startxref offset\n\nCaused by:\n    startxref not found in PDF";
+
+        $this->server->enqueue(
+            ScriptedResponse::ndjson('/extract/stream', [
+                $this->recordLine(self::PAGE_RECORDS[0]),
+                json_encode(['error' => $chain], JSON_THROW_ON_ERROR),
+            ]),
+        );
+
+        $client = new Client($this->server->baseUri());
+
+        $records = [];
+        $exception = null;
+
+        try {
+            foreach ($client->extractStream(Source::bytes(self::PDF_BYTES)) as $record) {
+                $records[] = $record;
+            }
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, 'the serve error record must terminate the stream');
+        self::assertSame(PdftractException::class, get_class($exception));
+        self::assertSame($chain, $exception->getMessage(), 'the Debug chain must surface byte-identical');
+        self::assertNull($exception->getStatusCode(), 'the stream answered 200 — no HTTP status failed');
+        self::assertNull($exception->getErrorCode(), 'the in-band record carries no error code');
+        self::assertNull($exception->getHint(), 'the in-band record carries no hint');
+
+        // The page extracted before the failure still reached the caller.
+        self::assertSame([self::PAGE_RECORDS[0]], $records);
+    }
+
+    public function test_a_bodyless_404_before_the_stream_body_still_raises_the_not_found_exception(): void
+    {
+        // The stream route's share of the buffered suite's bodyless-404
+        // pin: an unknown path never reaches a serve handler, so axum's
+        // router answers with a bare 404, no body and no Content-Type
+        // (captured from the probe build —
+        // transcript-errors/unknown-route.http), and that rejection is
+        // route-independent: it hits /extract/stream callers like any
+        // other. The stream path shares the buffered route's error
+        // builder — src/Client.php throws serverError() from the
+        // non-2xx check before a single NDJSON record is read — so the
+        // status alone must still pick NotFoundException, with no error
+        // code, no hint, and the empty excerpt in the message.
+        $this->server->enqueue(
+            ScriptedResponse::text('', '/extract/stream')->withStatus(404)->named('bodyless 404'),
+        );
+
+        $client = new Client($this->server->baseUri());
+
+        $records = [];
+        $exception = null;
+
+        try {
+            foreach ($client->extractStream(Source::bytes(self::PDF_BYTES)) as $record) {
+                $records[] = $record;
+            }
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, 'a bodyless 404 must still raise PdftractException on the stream route');
+        self::assertSame(NotFoundException::class, get_class($exception), 'the status alone picks the class');
+        self::assertSame(404, $exception->getStatusCode());
+        self::assertNull($exception->getErrorCode(), 'no serve-API error code can be read from an empty body');
+        self::assertNull($exception->getHint());
+        self::assertStringContainsString('404', $exception->getMessage());
+        self::assertSame([], $records, 'the rejection arrived before the body — no record can be yielded');
+    }
+
     #[DataProvider('provideStreamRejectedBeforeTheBody')]
     public function test_a_non_2xx_status_before_the_body_maps_to_the_documented_exception(
         int $status,
@@ -759,17 +848,30 @@ final class ClientStreamingRouteTest extends TestCase
 
     public static function provideStreamRejectedBeforeTheBody(): array
     {
-        // The same rows the buffered route's provider pins: the mapping
-        // lives in serverError(), shared by both routes, so a stream
-        // rejection must type identically — including staying on the base
-        // class for the unmapped 5xx.
+        // The same rows the buffered route's provider pins, with the same
+        // bodies: the mapping lives in serverError(), shared by both routes,
+        // so a stream rejection must type identically — including staying on
+        // the base class for the unmapped families. Serve-produced rows
+        // carry the bodies serve.rs actually answers with at the pinned
+        // revision eeab77e, reconciled in docs/notes/serve-parity-gap.md
+        // (Addendum 2026-09-27d): 400 MISSING_FIELD, the GET /extract
+        // guard's 404 NOT_FOUND, 413 REQUEST_TOO_LARGE with the hint field
+        // omitted, 422 ENCRYPTED with its CLI-only hint, and 500 INTERNAL
+        // with the hex correlation tag as the hint. 401/403 and 429/503 are
+        // reverse-proxy artefacts (the serve API has no auth or rate
+        // limiting of its own — serve.rs:6-17), so those rows keep
+        // representative payloads; the class mapping reads the status
+        // alone, never the body's contents.
         return [
-            '400 request validation' => [400, 'INVALID_REQUEST', 'pages option is not a page range', 'use N or N-M', ValidationException::class],
+            '400 request validation' => [400, 'MISSING_FIELD', 'No PDF file uploaded', "Supply the 'file' multipart field", ValidationException::class],
             '401 unauthenticated' => [401, 'UNAUTHORIZED', 'missing or invalid api key', null, AuthenticationException::class],
-            '404 not found' => [404, 'NOT_FOUND', 'no such route', null, NotFoundException::class],
-            '422 document rejected' => [422, 'ENCRYPTED', 'document requires a password', 'pass password', ValidationException::class],
+            '403 forbidden' => [403, 'FORBIDDEN', 'this key cannot use the extract route', null, AuthenticationException::class],
+            '404 not found' => [404, 'NOT_FOUND', 'POST to /extract with multipart/form-data is required; file-path parameters are not supported', "Use POST /extract with a 'file' field containing the PDF bytes", NotFoundException::class],
+            '413 payload too large' => [413, 'REQUEST_TOO_LARGE', 'Request body exceeds the configured limit', null, ValidationException::class],
+            '422 document rejected' => [422, 'ENCRYPTED', 'document requires a password', 'Supply the correct password via --password, or use an Adobe-side decryption tool first', ValidationException::class],
             '429 rate limited' => [429, 'RATE_LIMITED', 'too many extraction requests', 'retry after the window', RateLimitException::class],
-            '500 server error' => [500, 'INTERNAL_ERROR', 'the extractor crashed on page 7', null, PdftractException::class],
+            '500 server error' => [500, 'INTERNAL', 'Internal error during extraction', 'Reference tag b19c00f2c0ffee for debugging', PdftractException::class],
+            '503 unavailable' => [503, 'UNAVAILABLE', 'pdftract is starting up', null, PdftractException::class],
         ];
     }
 

@@ -535,30 +535,65 @@ final class ClientBufferedRouteTest extends TestCase
     public static function provideServerErrorResponses(): array
     {
         // One row per mapped status of src/Client.php
-        // exceptionClassForStatus(), plus the unmapped 5xx family, which
-        // must stay on the base class. 401/403 and 429 come from an
-        // authenticating or quota-ing reverse proxy (the serve API has no
-        // auth or rate limiting of its own); 400/413/422 are the serve
-        // API's request-validation statuses (serve.rs: BAD_REQUEST,
-        // MISSING_FIELD, REQUEST_TOO_LARGE, ENCRYPTED, WRONG_PASSWORD,
-        // CORRUPT_PDF, EXTRACTION_ERROR, DECOMPRESSION_LIMIT).
+        // exceptionClassForStatus(), plus the unmapped families, which
+        // must stay on the base class. Serve-produced rows carry the
+        // bodies serve.rs actually answers with at the pinned revision
+        // eeab77e, reconciled in docs/notes/serve-parity-gap.md
+        // (Addendum 2026-09-27d):
+        //
+        //   400 MISSING_FIELD | BAD_REQUEST — receive_pdf/build_options
+        //     rejections (serve.rs:826-831, 906-908, 933-941, 950-957;
+        //     status pick serve.rs:1082); the row shapes the missing-file
+        //     body verbatim, down to its hint
+        //   404 NOT_FOUND — the GET /extract file-path guard, the only
+        //     JSON 404 the serve API emits (serve.rs:521-528); an unknown
+        //     path is axum's bodyless 404, pinned separately below
+        //   413 REQUEST_TOO_LARGE — body-limit middleware, hint field
+        //     omitted (serve.rs:421-441 content-length pre-check, 444-458
+        //     DefaultBodyLimit conversion)
+        //   422 ENCRYPTED | WRONG_PASSWORD | CORRUPT_PDF |
+        //     EXTRACTION_ERROR | DECOMPRESSION_LIMIT — extraction
+        //     rejections (serve.rs:1032-1061, DiagCode table 1034-1052,
+        //     status pick 1083-1087); the row carries serve's verbatim
+        //     ENCRYPTED hint, which advises a CLI flag no HTTP caller can
+        //     use
+        //   500 INTERNAL | INTERNAL_PANIC — server-side failures with a
+        //     fixed message and a hex correlation tag as the hint
+        //     (serve.rs:1062-1077, pick 1088)
+        //
+        // 401/403 and 429 come from an authenticating or quota-ing
+        // reverse proxy (the serve API has no auth or rate limiting of
+        // its own — serve.rs:6-17), and 503 is likewise proxy-side
+        // maintenance; those bodies are whatever the proxy sends, so the
+        // rows keep representative payloads. The class mapping reads the
+        // status alone, never the body's contents.
         return [
-            '400 request validation' => [400, 'INVALID_REQUEST', 'pages option is not a page range', 'use N or N-M', ValidationException::class],
+            '400 request validation' => [400, 'MISSING_FIELD', 'No PDF file uploaded', "Supply the 'file' multipart field", ValidationException::class],
             '401 unauthenticated' => [401, 'UNAUTHORIZED', 'missing or invalid api key', null, AuthenticationException::class],
             '403 forbidden' => [403, 'FORBIDDEN', 'this key cannot use the extract route', null, AuthenticationException::class],
-            '404 not found' => [404, 'NOT_FOUND', 'no such document', null, NotFoundException::class],
-            '413 payload too large' => [413, 'REQUEST_TOO_LARGE', 'upload exceeds the configured limit', null, ValidationException::class],
-            '422 document rejected' => [422, 'ENCRYPTED', 'document requires a password', 'pass password', ValidationException::class],
+            '404 not found' => [404, 'NOT_FOUND', 'POST to /extract with multipart/form-data is required; file-path parameters are not supported', "Use POST /extract with a 'file' field containing the PDF bytes", NotFoundException::class],
+            '413 payload too large' => [413, 'REQUEST_TOO_LARGE', 'Request body exceeds the configured limit', null, ValidationException::class],
+            '422 document rejected' => [422, 'ENCRYPTED', 'document requires a password', 'Supply the correct password via --password, or use an Adobe-side decryption tool first', ValidationException::class],
             '429 rate limited' => [429, 'RATE_LIMITED', 'too many extraction requests', 'retry after the window', RateLimitException::class],
-            '500 server error' => [500, 'INTERNAL_ERROR', 'the extractor crashed on page 7', null, PdftractException::class],
+            '500 server error' => [500, 'INTERNAL', 'Internal error during extraction', 'Reference tag b19c00f2c0ffee for debugging', PdftractException::class],
             '503 unavailable' => [503, 'UNAVAILABLE', 'pdftract is starting up', null, PdftractException::class],
         ];
     }
 
     public function test_extract_text_maps_a_server_error_to_the_documented_exception(): void
     {
+        // The hint is serve's verbatim ENCRYPTED text (serve.rs:1035-1038)
+        // — advice aimed at a CLI user, impossible to follow over HTTP,
+        // and surfaced to the caller unchanged because surfacing it
+        // unchanged is the client's contract.
         $this->server->enqueue(
-            ScriptedResponse::error('/extract/text', 422, 'ENCRYPTED', 'document requires a password', 'pass password'),
+            ScriptedResponse::error(
+                '/extract/text',
+                422,
+                'ENCRYPTED',
+                'document requires a password',
+                'Supply the correct password via --password, or use an Adobe-side decryption tool first',
+            ),
         );
 
         $client = new Client($this->server->baseUri());
@@ -576,7 +611,7 @@ final class ClientBufferedRouteTest extends TestCase
         self::assertSame(422, $exception->getStatusCode());
         self::assertSame('ENCRYPTED', $exception->getErrorCode());
         self::assertStringContainsString('document requires a password', $exception->getMessage());
-        self::assertSame('pass password', $exception->getHint());
+        self::assertSame('Supply the correct password via --password, or use an Adobe-side decryption tool first', $exception->getHint());
     }
 
     #[DataProvider('provideNonJsonErrorBodies')]
@@ -603,7 +638,14 @@ final class ClientBufferedRouteTest extends TestCase
         // the raw body instead of inventing fields. Every row here has an
         // unmapped status, and an unmapped status stays on the base class
         // whatever its body says — the class is picked by status alone, and
-        // none of 409/500/502 names a failure mode callers branch on.
+        // none of 405/409/500/502 names a failure mode callers branch on.
+        // The 405 row is serve's own wrong-method answer, not just a proxy
+        // artefact: a path registered for POST only (every route but GET
+        // /extract, which deliberately 404s instead — serve.rs:408-411,
+        // 521-528) rejects other methods with axum's bodyless 405. Serve
+        // produces exactly two bodyless failure statuses — this 405 and the
+        // unknown-path 404 the next test pins — and neither can carry the
+        // serve API's {error, message, hint} body.
         self::assertNotNull($exception, 'a non-2xx response must raise PdftractException even without an error body');
         self::assertSame(PdftractException::class, get_class($exception), 'a foreign error body must stay on the base class');
         self::assertSame($status, $exception->getStatusCode());
@@ -616,11 +658,51 @@ final class ClientBufferedRouteTest extends TestCase
     public static function provideNonJsonErrorBodies(): array
     {
         return [
+            '405 empty body' => [405, ''],
             '409 html conflict page' => [409, '<html><body>409 Conflict</body></html>'],
             '502 html proxy page' => [502, '<html><body>502 Bad Gateway</body></html>'],
             '500 empty body' => [500, ''],
             '502 truncated json' => [502, '{"error": "gateway'],
         ];
+    }
+
+    public function test_a_bodyless_404_still_raises_the_not_found_exception(): void
+    {
+        // Unknown paths never reach a serve handler: axum's router answers
+        // them with a bare 404 and no body (verified against the probe
+        // build: `GET /no/such/route` → 404, 0 bytes) — there is no JSON
+        // error builder on that path, unlike the GET /extract guard whose
+        // NOT_FOUND body the mapped-status provider pins above. The client
+        // always constructs its own route URL, so the harness plays the
+        // router's role here: it answers the route the call actually hits
+        // with the bare status and no body, which is the whole of what the
+        // real 404 delivers. The class is picked by status alone, so even
+        // this bodyless 404 must raise the NotFoundException, carrying no
+        // error code, no hint, and the empty excerpt in its message (the
+        // same rule the docblock on exceptionClassForStatus() states for a
+        // proxy's HTML 404 page). The stream route pins the same rule
+        // against /extract/stream — the router's 404 is
+        // route-independent — in its own bodyless-404 test.
+        $this->server->enqueue(
+            ScriptedResponse::text('', '/extract/text')->withStatus(404)->named('bodyless 404'),
+        );
+
+        $client = new Client($this->server->baseUri());
+
+        $exception = null;
+
+        try {
+            $client->extractText(Source::bytes(self::PDF_BYTES));
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, 'a bodyless 404 must still raise PdftractException');
+        self::assertSame(NotFoundException::class, get_class($exception), 'the status alone picks the class');
+        self::assertSame(404, $exception->getStatusCode());
+        self::assertNull($exception->getErrorCode(), 'no serve-API error code can be read from an empty body');
+        self::assertNull($exception->getHint());
+        self::assertStringContainsString('404', $exception->getMessage());
     }
 
     #[DataProvider('provideUndecodableSuccessBodies')]

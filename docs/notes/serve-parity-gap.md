@@ -526,6 +526,149 @@ next worker pointed at them does not re-derive what follows:
   binary can produce diverges from the CLI's semantics. The extraction
   defect gating the success domain remains upstream (bf-4bd's territory).
 
+## Addendum 2026-09-27d — per-route error-status inventory and the Client status→exception reconciliation
+
+This records the error-path half of the serve contract: every HTTP status
+each documented route can fail with, and whether
+`Client::exceptionClassForStatus()` (`src/Client.php`) types each of them
+the way the upstream evidence supports. Upstream revision: `eeab77e`,
+cited from the pristine pinned source throughout. The static inventory was
+then checked against the live serve API: every row marked **observed**
+below was produced on 2026-09-27 by raw HTTP requests against the probe
+build of Addendum 2026-09-26 (`eeab77e` plus its two disclosed
+`axum::serve` service-construction call-site patches, which no error path
+under test reads). Three probe runs back the rows: the routing and
+extraction-error rows came from a default-limit (`--max-upload-mb 256`)
+server (transcripts under `.probe-parity/transcript-errors/`, timestamps
+10:34Z); the
+413 and multipart-read rows from a `--max-upload-mb 1` server started at
+15:39Z to make the 413 reachable; and the chunked-over-limit and
+boundary-less-Content-Type rows were (re)established at 16:55Z against
+that same 1 MB server with raw-socket chunked requests, after a retained
+intermediate probe artefact (a boundary-less request saved as a chunked
+result) showed the extractor rejection recorded below. Transcripts:
+`.probe-parity/transcript-errors/*.http`, error-tag lines in
+`.probe-parity/transcript-errors/serve-1mb-error-tags.log`. Bead:
+`pdfphp-58c8a99d`.
+
+### The error-status inventory, per route
+
+Shared machinery first, because most of the surface is shared:
+
+- **All six routes — body limit → 413.** The body-limit layers wrap the
+  whole router (`serve.rs:415-462`): a Content-Length over
+  `--max-upload-mb` is rejected pre-handler (`serve.rs:421-441`) and any
+  `DefaultBodyLimit` rejection is converted post-handler
+  (`serve.rs:444-458`), both to `413 {"error":"REQUEST_TOO_LARGE",
+  "message":"Request body exceeds the configured limit"}` with the hint
+  field **omitted** (`serve.rs:426-431, 446-451`). *Observed:* 413, 83 B,
+  no hint, on `POST /extract` and `POST /extract/stream`.
+- **Unknown path → axum's bodyless 404.** No JSON builder exists on the
+  router fallback. *Observed:* `GET` and `POST /no/such/route` → 404,
+  0 bytes, no Content-Type.
+- **Known path, wrong method → axum's bodyless 405.** Every route is
+  registered for one method except `/extract` (GET guard + POST handler,
+  `serve.rs:408-411`); other methods fall to axum's method-not-allowed
+  response. *Observed:* `GET /extract/text`, `GET /extract/stream`,
+  `POST /health` → 405, 0 bytes. Serve produces exactly these two
+  bodyless failure statuses (404, 405); no other failure omits the JSON
+  body.
+- **`GET /` and `GET /health`** have no failure mode: fixed 200 JSON
+  (`serve.rs:495-506, 509-514`). *Observed:* 200.
+
+The three POST routes share `receive_pdf` (`serve.rs:791-911`) and
+`build_options` (`serve.rs:918-996`), so their pre-extraction failures are
+identical on `/extract`, `/extract/text`, and `/extract/stream`:
+
+| Failure | Status / body | Evidence | |
+|---|---|---|---|
+| No `file`/`pdf` part | **400** `MISSING_FIELD` "No PDF file uploaded", hint "Supply the 'file' multipart field" | `serve.rs:906-908`, hint built `1023-1024`, status `1082` | observed on `/extract`, `/extract/stream` |
+| Upload not a PDF — under 5 bytes → "Uploaded file is too small to be a valid PDF"; no `%PDF-` prefix → "Uploaded file is not a PDF (missing %PDF- header)"; hint "Upload a valid PDF file (must start with %PDF-)" | **400** `BAD_REQUEST` | magic-byte check `serve.rs:341-352`, rejection `826-831` | observed (both message variants, all three POST routes) |
+| Duplicate `file`+`pdf` parts | **no error** — last part wins (`serve.rs:839`); a later *invalid* part still 400s via the magic check (first failing field aborts) | `serve.rs:819-841` | observed (later-invalid variant) |
+| Malformed multipart body | **500** `INTERNAL` "Internal error during extraction", hint "Reference tag `<hex uuid>` for debugging" — *not* a 400: the multipart read error surfaces through the catch-all arm | `serve.rs:811-814, 820-823` → `1062-1068`, status `1088` | observed ("incomplete multipart stream" in the tracing tag) |
+| Over-limit **chunked** upload (no Content-Length) | **500** `INTERNAL` — the body limit kills the field read mid-stream, so the rejection surfaces through the same multipart-read arm as a 500, not the middleware's 413 | `serve.rs:820-823` | observed ("failed to read stream"; tracing tag matches the hint) |
+| `max_decompress_gb` > 4096 | **400** `BAD_REQUEST` "max_decompress_gb value N exceeds hard cap of 4096 GB", hint "Use a value <= 4096 GB" | `serve.rs:932-943` | observed |
+| `full_render` requested, PDFium absent (only when compiled with `ocr`+`full-render`) | **400** `BAD_REQUEST` "full_render requested but PDFium is not available at runtime…", hint "Install PDFium or build with --features full-render" | `serve.rs:946-958` | static only (probe build's feature set) |
+| Garbage field values (`pages=banana`, `no_cache=notabool`, unknown names) | **no error** — booleans coerced (`serve.rs:856, 882`), integers dropped (`864-867, 874-877`), unknown fields WARN-and-ignored (`892-901`) | | observed (no rejection) |
+| `spawn_blocking` cancel / panic | **500** `INTERNAL` / `INTERNAL_PANIC`, fixed message + hex-tag hint | `serve.rs:564-572, 643-651, 1069-1077` | static |
+
+Extraction failure diverges by route — the one place the POST routes
+disagree:
+
+| Route | Failure surface | Evidence | |
+|---|---|---|---|
+| `POST /extract`, `POST /extract/text` | **422** `{"error": CODE, "message": <Debug-formatted anyhow chain>, "hint"?}` — CODE ∈ `ENCRYPTED` (hint advises the CLI-only `--password`), `WRONG_PASSWORD`, `DECOMPRESSION_LIMIT`, `CORRUPT_PDF`, `EXTRACTION_ERROR` (no hint); all five pick 422 at `serve.rs:1083-1087` | DiagCode table `serve.rs:1032-1061` | observed: 422 `EXTRACTION_ERROR`, 118 B, message `Failed to find startxref offset\n\nCaused by:\n    startxref not found in PDF` |
+| `POST /extract/stream` | **200** `application/x-ndjson` (committed before extraction starts, `serve.rs:765-766`); the failure travels in-band as a final newline-terminated record `{"error": <same Debug chain>}` — no code, no hint, no non-2xx | `serve.rs:745-754` (`format!("{:?}", e)` at `748`) | observed: 200, 89 B + newline |
+
+`GET /extract` never extracts: any query parameters are ignored wholesale
+and the file-path guard answers `404 {"error":"NOT_FOUND", "message":"POST
+to /extract with multipart/form-data is required; file-path parameters are
+not supported", "hint":"Use POST /extract with a 'file' field containing
+the PDF bytes"}` (`serve.rs:521-528`) — the only JSON 404 the serve API
+emits. *Observed:* 404, 199 B, body verbatim, `?path=/etc/passwd` ignored.
+
+"Bad query parameters" do not exist as an error class: no route reads a
+query string, and the multipart field equivalents of bad parameters are
+silently coerced (rows above). `401`/`403`/`429`/`503` are produced by
+nothing in serve.rs — the API has no auth or rate limiting by design
+(`serve.rs:6-17`) — so those statuses reach an SDK caller only from an
+authenticating/quota-ing reverse proxy, with whatever body the proxy
+sends.
+
+### Reconciliation against `Client::exceptionClassForStatus()`
+
+| Status | Serve sources (all upstream-verified) | Client class | Verdict |
+|---|---|---|---|
+| 400 | `MISSING_FIELD`, `BAD_REQUEST` (magic bytes, hard cap, PDFium) | `ValidationException` | correct — request-validation family |
+| 404 | guard's `NOT_FOUND` JSON; router's bodyless 404 | `NotFoundException` | correct for both — the class is picked by status alone, so the bodyless variant types identically and carries no code/hint (pinned: `test_a_bodyless_404_still_raises_the_not_found_exception`) |
+| 405 | router's bodyless 405 | base `PdftractException` | correct — no failure mode callers branch on; nothing to specialise |
+| 413 | `REQUEST_TOO_LARGE` (hint omitted) | `ValidationException` | correct |
+| 422 | `ENCRYPTED` / `WRONG_PASSWORD` / `DECOMPRESSION_LIMIT` / `CORRUPT_PDF` / `EXTRACTION_ERROR` | `ValidationException` | correct — the document-rejection family the docblock already names |
+| 500 | `INTERNAL` / `INTERNAL_PANIC`, multipart-read errors, chunked-over-limit | base `PdftractException` | correct — server-side, nothing to branch on |
+| 200 + in-band `{"error": …}` | stream route's mid-extraction failure | base `PdftractException` via `decodeRecord()`, null status/code/hint | correct — and deliberately divergent from the buffered 422, as Addendum 2026-09-27 pinned |
+| 401/403/429 | proxy-only (`serve.rs:6-17`) | `AuthenticationException` / `RateLimitException` | retained deliberately as proxy contracts; unchanged |
+| any other 4xx/5xx | proxy artefacts | base `PdftractException`, body excerpted | correct |
+
+**Verdict: zero divergences.** Every status the serve API can produce maps
+to the exception class the client already raises; no `src/` change is
+warranted. What was *not* aligned to upstream until this bead was the
+fixture-harness coverage: the buffered and streaming error-path providers
+pinned invented bodies (`INVALID_REQUEST` "pages option is not a page
+range", `NOT_FOUND` "no such document", `ENCRYPTED` hint "pass password",
+`INTERNAL_ERROR` "the extractor crashed on page 7") that no version of
+serve.rs emits.
+
+### Alignment applied to the fixture-harness tests
+
+- Both providers' serve-produced rows now carry the bodies
+  `eeab77e` answers with, verbatim down to hints (400 `MISSING_FIELD`, the
+  guard's 404 `NOT_FOUND`, 413 `REQUEST_TOO_LARGE` without hint, 422
+  `ENCRYPTED` with its CLI-only hint, 500 `INTERNAL` with the tag-shaped
+  hint). Proxy-side rows (401/403/429/503) keep representative payloads,
+  labelled as such in the provider comments.
+- Added: the bodyless router 404 (→ `NotFoundException`, no code/hint) and
+  the bodyless 405 row in the non-JSON-body provider (→ base class) —
+  serve's two bodyless failure statuses.
+- Added: the stream route's real mid-stream error event, captured from the
+  probe build — a multi-line Debug-formatted anyhow chain surfaced
+  verbatim by `assertSame` onto the base `PdftractException` with null
+  status/code/hint.
+- The streaming pre-body provider now carries the buffered provider's full
+  status set (403/413/503 added), so "the same rows, shared builder" is
+  exact on both suites.
+
+After the probes ran, every `serve.rs` range this addendum and the
+re-aligned test comments cite was re-read line-by-line against the
+pristine `eeab77e` tree (`~/scratch/pdftract-eeab77e-pristine`) — quoted
+bodies, hint texts, status picks (1082/1083-1087/1088), the DiagCode
+match (1034-1052) and the shared `receive_pdf`/`build_options` ranges
+all match what the probes answered. The buffered suite's bodyless-404
+pin has a streaming-side mirror
+(`test_a_bodyless_404_before_the_stream_body_still_raises_the_not_found_exception`),
+since the router's bodyless 404 is route-independent and
+`serverError()` throws on the stream path before any record is read
+(`src/Client.php`, the non-2xx check ahead of the NDJSON loop).
+
 
 
 `ExtractParams` (`serve.rs:211-228`) and the `receive_pdf` field list
