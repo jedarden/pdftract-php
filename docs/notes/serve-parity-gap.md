@@ -487,6 +487,45 @@ addendum settles is that the CLI-side wrapper — the only hash() that can
 exist today — matches the real binary on format, determinism, structure,
 shape, bytes, and failure domain.
 
+## Addendum 2026-09-27c — the stock conformance binaries cannot serve the parity pin (empirical)
+
+Bead `pdfphp-593f9ff4` says to run "the real binaries built by
+pdfphp-08e4c83c" under `pdftract --serve`. Both were run as named
+(2026-09-27): `~/pdftract/target/conformance/pdftract-default` and
+`-full`, sha256s matching that bead's record exactly (`9eb6b252…`,
+`4a2d027a…`), i.e. pristine `eeab77e` builds whose only delta is the
+`grep` feature — nothing a route under test reads. Recorded here so the
+next worker pointed at them does not re-derive what follows:
+
+- **Serve side: no response exists to pin.** `pdftract serve --bind
+  127.0.0.1:<port> --no-cache` starts and prints its banner, then answers
+  **HTTP 500 on every request, including `GET /health`** — body:
+  `Missing request extension: axum::extract::connect_info::ConnectInfo<…>`
+  This is Addendum 2026-09-26's disclosed blocker, re-confirmed against the
+  exact conformance artifacts. `tests/ClientServeParityTest.php` cannot run
+  green against the stock binaries — not because a parity assertion fails,
+  but because the first serve-side comparison has no counterpart. The
+  two-call-site `into_make_service_with_connect_info` patch is what makes
+  any POST provable; the probe build carries it.
+- **CLI side: the root cause never reaches the terminal.** At `eeab77e` the
+  extract dispatch prints only `Error: Failed to extract PDF` — anyhow's
+  `Caused by:` chain stays inside the error value. The root causes the serve
+  bodies carry (`Document contains no pages`, `No /Root reference in
+  trailer`) are invisible on the stock CLI surface. Addendum 2026-09-27's
+  "serve `message` byte-identical to the CLI's stderr root cause, 12/12" was
+  therefore observed **through the probe build's stderr-only PROBE
+  diagnostic** that surfaces the chain; on stock, serve reports strictly
+  more of the failure than the CLI terminal does, and the equality is
+  message-to-chain, not message-to-terminal.
+- **Consequence.** The serve-parity pin (and any future re-run) needs the
+  disclosed-patch probe build (`.probe-parity/target/release/pdftract` in
+  this workspace). Neither finding is a divergence in `Client`'s response
+  mapping: the SDK maps whatever the wire carries — the buffered 422 to
+  `ValidationException` with code and message verbatim, the in-band stream
+  record to the base `PdftractException` — and no response the patched
+  binary can produce diverges from the CLI's semantics. The extraction
+  defect gating the success domain remains upstream (bf-4bd's territory).
+
 
 
 `ExtractParams` (`serve.rs:211-228`) and the `receive_pdf` field list
