@@ -71,7 +71,7 @@ exists. **OPEN** = verdict deliberately not recorded; empirical check pending.
 | 4 | `extractStream` | `pdftract extract --ndjson` | `POST /extract/stream` | COVERED | CLI: `--ndjson` `cli.rs:103-105`. Serve: `serve.rs:413`, handler `serve.rs:698`, `extract_pdf_ndjson` `serve.rs:745`, `Content-Type: application/x-ndjson` `serve.rs:768` |
 | 5 | `search` | `pdftract grep` (itself feature-gated, non-default) | none | GAP | CLI: `cli.rs:208-210` (`#[cfg(feature = "grep")]`), dispatch `main.rs:692`, feature `grep = ["dep:indicatif"]` `Cargo.toml:134` with `default = []` `Cargo.toml:118`. Serve: absent from `serve.rs:406-414` |
 | 6 | `getMetadata` | no dedicated subcommand — metadata rides `extract --json` output | none (metadata only embedded in the `POST /extract` full response) | GAP | CLI: no `Commands` variant other than `Extract` carries metadata (`cli.rs:29-442`); `"metadata"` key in `result_to_json`, `pdftract-core/src/extract.rs:1575`. Serve: `serve.rs:576-583` |
-| 7 | `hash` | `pdftract hash` | none | GAP | CLI: `cli.rs:215-227`, dispatch `main.rs:748`. Serve: absent from `serve.rs:406-414` |
+| 7 | `hash` | `pdftract hash` | none | GAP | CLI: `cli.rs:215-227`, dispatch `main.rs:748`. Serve: absent from `serve.rs:406-414`. CLI-side wrapper semantics verified against the real binary — **Addendum 2026-09-27b** |
 | 8 | `classify` | `pdftract classify` | none | GAP | CLI: `cli.rs:179-207`, dispatch `main.rs:659`. Serve: absent from `serve.rs:406-414` |
 | 9 | `verifyReceipt` | `pdftract verify-receipt` | none | GAP | CLI: `cli.rs:213-214`, dispatch `main.rs:742`. Serve: absent from `serve.rs:406-414` |
 
@@ -415,7 +415,79 @@ pinned. Success-domain parity is the residual gap, gated on the upstream
 page-iterator defect (bf-4bd's territory), with executable forward pins
 waiting in `tests/ClientServeParityTest.php`.
 
-## Ancillary finding — serve cannot process encrypted PDFs
+## Addendum 2026-09-27b — the hash row, CLI side: the wrapper's hash() verified against the real binary (empirical)
+
+This records the empirical verification of the `hash` row's CLI half. Upstream
+revision: the same probe build as Addendum 2026-09-26 (byte-identical to
+`eeab77e` plus its disclosed `serve.rs` service-construction patch, which
+touches no hash code). Beads: `pdfphp-ee8d6dbd` (implementation + wrapper
+contract pins, commit `8fff818`) and `pdfphp-fb9eb723` (sweep-harness pins +
+this record).
+
+**What the row claimed before.** `hash` is GAP on serve (no route), and — the
+2026-09-23 addendum — the fingerprint embedded in `POST /extract` is computed
+over catalog-only input, so it is a *different value* than `pdftract hash`
+prints. That finding was static. The CLI-side semantics themselves had no
+empirical pin in the sweep harness, unlike the other eight methods.
+
+**What was run.** The CLI-subprocess Client's `hash()`
+(`src/Pdftract/Client.php`, the repaired implementation) driven against the
+probe binary through the sweep harness
+(`tests/ClientBinaryConformanceTest.php`, group `binary-conformance`, env
+`PDFTRACT_BIN`), over the vendored fixtures `scientific_paper/11.pdf` and
+`12.pdf`. Pins, all green (43 tests, 143 assertions, 5 skips across the
+whole `binary-conformance` group — the same run classifies the other
+methods' still-unfixed cases as before and exercises pdfphp-ee8d6dbd's
+four real-binary wrapper pins too):
+
+- **INV-13 exact.** The returned fingerprint matches
+  `^pdftract-v1:[0-9a-f]{64}$` — upstream's own invariant
+  (fingerprint/mod.rs:23). The wrapper's validation deliberately accepts the
+  version-prefixed family (a future `pdftract-v2:` passes); the harness holds
+  today's binary to v1.
+- **Determinism.** The same file hashes identically across runs.
+- **Structural, not content-addressing — the 2026-09-23 addendum confirmed
+  empirically.** 11.pdf and 12.pdf are bytewise distinct (md5
+  `33fa571e…` vs `9e89aada…`, 2534 vs 2553 bytes) yet the binary prints the
+  identical `pdftract-v1:ab24a95f…ea8a8` line for both. The naive pin
+  (fingerprints differ across distinct documents) *fails* against the real
+  binary and is deliberately inverted: "different documents never collide"
+  is not pinnable, the collision is.
+- **Return shape.** Exactly one `hash` key. The vendored suite's hash-case
+  `expected` blocks (`fast_hash`, `page_count`, `content_hash_stable`) were
+  authored against the wrapper's retired fictional contract and stay
+  unenforced; the harness pins the opposite shape.
+- **Byte equality with the raw subcommand.** `hash()`'s value equals
+  `pdftract hash <fixture>` stdout, byte for byte.
+- **Failure domain.** A missing input fails *inside* the binary — exit code
+  2, `Failed to compute fingerprint from file: …` on stderr, no clap parse
+  marker — which is what distinguishes hash's argv (accepted end-to-end, the
+  bf-1s2 known-good control) from the seven parse_error rows the fix beads
+  are flipping.
+
+**Mutation check** (the sibling beads' protocol, on a copy of the tree):
+mutating `hash()`'s argument construction — `['hash']` → `['hashs']` (wrong
+subcommand), or dropping the source positional entirely (missing argument) —
+flips every hash-asserting pin to failure: 43 tests, 11 failures under each
+mutation (all seven sweep-harness pins plus pdfphp-ee8d6dbd's four
+real-binary wrapper pins in `tests/ClientHashConformanceTest.php`), with
+clap's `unrecognized subcommand` /
+`required arguments were not provided` markers on stderr. The pins bind the
+argument construction, not just the happy path.
+
+**Bearing on the bf-4bd hash row.** The verdict is unchanged and now
+two-sided: `hash` stays **GAP** on serve — no route, and the closest embedded
+value is a different fingerprint (static, 2026-09-23 addendum), while the
+value the CLI prints is structural over the full page tree (now demonstrated:
+the bytewise-distinct twins share it). A serve-derived `hash()` would still
+silently diverge from the CLI method it replaced, and at `eeab77e` the
+extract-side value is unobtainable empirically anyway (every fixture fails
+extraction). The method-surface decision itself remains `bf-4bd`'s; what this
+addendum settles is that the CLI-side wrapper — the only hash() that can
+exist today — matches the real binary on format, determinism, structure,
+shape, bytes, and failure domain.
+
+
 
 `ExtractParams` (`serve.rs:211-228`) and the `receive_pdf` field list
 (`serve.rs:775-791`) accept no password field, while the CLI's
