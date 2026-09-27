@@ -19,6 +19,7 @@ use Jedarden\Pdftract\TimeoutException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
+use Psr\Log\AbstractLogger;
 
 /**
  * Streaming-route coverage for the canonical HTTP client: POST
@@ -83,6 +84,20 @@ use PHPUnit\Framework\TestCase;
  * runs *past* its bound completes, and
  * test_the_idle_deadline_resets_on_every_chunk_* proves the clock restarts
  * at each record), and the raised TimeoutException names "silence".
+ *
+ * The logging section (bead pdfphp-f2b0b682) holds the stream route's PSR-3
+ * contract to the same standard the buffered suite holds its own
+ * (test_a_buffered_request_and_its_failure_are_logged in
+ * tests/ClientBufferedRouteTest.php): the execution debug record with the
+ * idle bound in context, the stream-specific error records for a mid-stream
+ * error line, an idle-bound breach and a transfer that dies mid-flight, the
+ * shared failure record a non-2xx rejection produces through the buffered
+ * routes' own error builder, and the abandon record the generator's finally
+ * emits whenever it dies unconsumed or an error escapes it. Every case joins
+ * the psr3-logging group, so --group psr3-logging runs the buffered and
+ * streamed contracts together. This is the live successor of the retired
+ * tests/Retired/verify_psr3_logger.php, which logged the same DEBUG/ERROR
+ * contract for the subprocess transport and must never run against this one.
  *
  * Every case runs offline: the loopback server answers from scripted
  * responses on an ephemeral 127.0.0.1 port, so nothing here can reach the
@@ -195,6 +210,50 @@ final class ClientStreamingRouteTest extends TestCase
         'ocr_language' => 'eng',
         'pages' => '1-4',
         'full_render' => 'true',
+    ];
+
+    /**
+     * The serve contract's complete accepted ExtractParams set, as the
+     * SDK's camelCase options
+     *
+     * Every name the serve API reads off a POST body (serve.rs ExtractParams
+     * 211-228, spelled out in docs/notes/serve-parity-gap.md: receipts,
+     * no_cache, full_render, max_decompress_gb, ocr_language, ocr_dpi,
+     * markdown_anchors, pages), forwarded in one streamed call so the whole
+     * accepted surface is pinned at once. The shared
+     * {@see self::FORWARDABLE_OPTIONS} exercises the drop semantics
+     * (no_cache=false, ocr_dpi=null) and the consumed 'timeout'; three of
+     * the accepted names — receipts, max_decompress_gb, markdown_anchors —
+     * appear in no other live pin on any route, so a normalisation bug in
+     * exactly those names would pass every other test. No reserved upload
+     * name appears here: the client rejects those outright (the
+     * reserved-field cases live in tests/ClientBufferedRouteTest.php).
+     */
+    private const ACCEPTED_EXTRACT_PARAMS = [
+        'receipts' => true,
+        'noCache' => true,
+        'fullRender' => true,
+        'maxDecompressGb' => 2,
+        'ocrLanguage' => 'deu',
+        'ocrDpi' => 300,
+        'markdownAnchors' => true,
+        'pages' => '2-5',
+    ];
+
+    /**
+     * What {@see self::ACCEPTED_EXTRACT_PARAMS} must arrive as on the wire:
+     * the same order, every camelCase name in serve's snake_case, booleans
+     * stringised as 'true', integers stringised
+     */
+    private const ACCEPTED_FIELDS = [
+        'receipts' => 'true',
+        'no_cache' => 'true',
+        'full_render' => 'true',
+        'max_decompress_gb' => '2',
+        'ocr_language' => 'deu',
+        'ocr_dpi' => '300',
+        'markdown_anchors' => 'true',
+        'pages' => '2-5',
     ];
 
     private LoopbackServer $server;
@@ -336,6 +395,36 @@ final class ClientStreamingRouteTest extends TestCase
         self::assertNotNull($request);
 
         self::assertSame(self::FORWARDED_FIELDS, $request->fields(), $request->describe());
+        $this->assertDocumentUpload($request);
+        self::assertSame('', $request->queryString(), 'options travel as form fields, not as a query string');
+    }
+
+    public function test_extract_stream_forwards_the_full_accepted_extract_params_set(): void
+    {
+        // Forwarding is verbatim and does not imply effect: every name in
+        // the serve contract's accepted ExtractParams set goes out exactly
+        // once, snake_cased, in one streamed call. assertSame pins the whole
+        // map against {@see self::ACCEPTED_FIELDS}, so a mangled integer, a
+        // boolean stringised as anything but 'true', a camelCase leak, a
+        // dropped receipt field, or an extra name all fail — including for
+        // the three names (receipts, max_decompress_gb, markdown_anchors) no
+        // other live pin forwards. The upload still rides alongside and the
+        // query string stays empty: "the only additional fields" is
+        // additional to the document, at every option.
+        $this->server->enqueue(
+            ScriptedResponse::ndjson('/extract/stream', $this->ndjsonLines([self::PAGE_RECORDS[0]])),
+        );
+
+        $client = new Client($this->server->baseUri());
+        iterator_to_array(
+            $client->extractStream(Source::bytes(self::PDF_BYTES), self::ACCEPTED_EXTRACT_PARAMS),
+            false,
+        );
+
+        $request = $this->server->lastRequest();
+        self::assertNotNull($request);
+
+        self::assertSame(self::ACCEPTED_FIELDS, $request->fields(), $request->describe());
         $this->assertDocumentUpload($request);
         self::assertSame('', $request->queryString(), 'options travel as form fields, not as a query string');
     }
@@ -817,6 +906,261 @@ final class ClientStreamingRouteTest extends TestCase
         );
     }
 
+    // --------------------------------------------------------------- logging
+
+    #[Group('psr3-logging')]
+    public function test_a_drained_stream_logs_its_execution_and_nothing_else(): void
+    {
+        // The stream route's execution record: one debug entry with the
+        // method, URL, and the idle bound in effect, emitted as the first
+        // iteration drives the generator. A stream consumed to completion
+        // logs nothing further — in particular no abandon record, which the
+        // finally reserves for a generator that died early.
+        $logger = new RecordingStreamLogger();
+
+        $this->server->enqueue(
+            ScriptedResponse::ndjson('/extract/stream', $this->ndjsonLines(self::PAGE_RECORDS)),
+        );
+
+        $client = new Client($this->server->baseUri(), null, $logger, 12.0);
+
+        self::assertSame(
+            self::PAGE_RECORDS,
+            iterator_to_array(
+                $client->extractStream(Source::bytes(self::PDF_BYTES), ['timeout' => 2.5]),
+                false,
+            ),
+        );
+
+        self::assertSame([['debug', 'Executing pdftract stream request']], $logger->messages());
+
+        $debugContext = $logger->records[0]['context'];
+        self::assertSame('POST', $debugContext['method']);
+        self::assertSame($this->server->baseUri() . '/extract/stream', $debugContext['url']);
+        self::assertSame(2.5, $debugContext['idle_timeout'], 'the context must carry the idle bound in effect');
+    }
+
+    #[Group('psr3-logging')]
+    public function test_abandoning_a_stream_midway_logs_the_abandon_record(): void
+    {
+        // A consumer that stops iterating before the stream ends leaves the
+        // generator suspended; dropping it must run the finally, which emits
+        // the abandon record as it reclaims the curl handles. The server's
+        // inter-record gaps keep the stream genuinely open at the drop.
+        $logger = new RecordingStreamLogger();
+
+        $this->server->enqueue(
+            ScriptedResponse::ndjson(
+                '/extract/stream',
+                $this->ndjsonLines(self::PAGE_RECORDS),
+                delaySeconds: 0.4,
+            ),
+        );
+
+        $client = new Client($this->server->baseUri(), null, $logger, 12.0);
+
+        $generator = $client->extractStream(Source::bytes(self::PDF_BYTES), ['timeout' => 30.0]);
+
+        $received = null;
+        foreach ($generator as $record) {
+            $received = $record;
+            break; // suspend the generator mid-stream
+        }
+
+        self::assertSame(self::PAGE_RECORDS[0], $received, 'the first record must arrive before the drop');
+
+        // Dropping the last reference is what must fire the record, so the
+        // collection pass below only mops up, it never produces the record.
+        unset($generator);
+        gc_collect_cycles();
+
+        self::assertSame(
+            [
+                ['debug', 'Executing pdftract stream request'],
+                ['debug', 'Abandoning pdftract stream'],
+            ],
+            $logger->messages(),
+        );
+
+        self::assertSame($this->server->baseUri() . '/extract/stream', $logger->records[1]['context']['url']);
+    }
+
+    #[Group('psr3-logging')]
+    public function test_a_stream_past_its_idle_bound_logs_the_timeout(): void
+    {
+        // The idle bound's error record: an error entry naming the URL and
+        // the bound that fired. The exception escapes the generator, so the
+        // finally closes it out with the abandon record — the same pairing
+        // every error path produces.
+        $logger = new RecordingStreamLogger();
+
+        $this->server->enqueue(ScriptedResponse::stalled('/extract/stream', 5.0));
+
+        $client = new Client($this->server->baseUri(), null, $logger, 30.0);
+
+        $exception = null;
+
+        try {
+            iterator_to_array($client->extractStream(Source::bytes(self::PDF_BYTES), ['timeout' => 0.4]), false);
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertInstanceOf(TimeoutException::class, $exception);
+
+        self::assertSame(
+            [
+                ['debug', 'Executing pdftract stream request'],
+                ['error', 'pdftract stream request timed out'],
+                ['debug', 'Abandoning pdftract stream'],
+            ],
+            $logger->messages(),
+        );
+
+        $errorContext = $logger->records[1]['context'];
+        self::assertSame($this->server->baseUri() . '/extract/stream', $errorContext['url']);
+        self::assertSame(0.4, $errorContext['timeout'], 'the record must carry the bound that fired');
+    }
+
+    #[Group('psr3-logging')]
+    public function test_a_midstream_error_record_is_logged(): void
+    {
+        // A {"error": ...} line terminates the stream as the documented
+        // exception, and the logger learns of it through the stream route's
+        // own error record. As on every error path, the exception escapes
+        // the generator, so the finally closes it out with the abandon
+        // record.
+        $logger = new RecordingStreamLogger();
+
+        $this->server->enqueue(
+            ScriptedResponse::ndjson('/extract/stream', [
+                $this->recordLine(self::PAGE_RECORDS[0]),
+                json_encode(['error' => 'ocr worker died on page 2'], JSON_THROW_ON_ERROR),
+            ]),
+        );
+
+        $client = new Client($this->server->baseUri(), null, $logger, 12.0);
+
+        $exception = null;
+
+        try {
+            iterator_to_array($client->extractStream(Source::bytes(self::PDF_BYTES)), false);
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, 'an error record must terminate the stream with an exception');
+
+        self::assertSame(
+            [
+                ['debug', 'Executing pdftract stream request'],
+                ['error', 'pdftract stream reported an error'],
+                ['debug', 'Abandoning pdftract stream'],
+            ],
+            $logger->messages(),
+        );
+
+        $errorContext = $logger->records[1]['context'];
+        self::assertSame($this->server->baseUri() . '/extract/stream', $errorContext['url']);
+        self::assertSame('ocr worker died on page 2', $errorContext['error']);
+    }
+
+    #[Group('psr3-logging')]
+    public function test_a_rejected_stream_logs_the_shared_failure_record(): void
+    {
+        // A non-2xx rejection logs the buffered contract's own failure
+        // record: the status-to-class mapping and its logger call live in
+        // the shared serverError() builder (src/Client.php), so the stream
+        // route must surface the same {url, status, error} entry the
+        // buffered suite pins — a stream whose body never becomes records
+        // may not skip the logging with it. The exception then escapes the
+        // generator, so the finally closes it out with the abandon record.
+        $logger = new RecordingStreamLogger();
+
+        $this->server->enqueue(
+            ScriptedResponse::error('/extract/stream', 500, 'INTERNAL_ERROR', 'boom'),
+        );
+
+        $client = new Client($this->server->baseUri(), null, $logger, 12.0);
+
+        $exception = null;
+
+        try {
+            iterator_to_array($client->extractStream(Source::bytes(self::PDF_BYTES)), false);
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, 'a non-2xx stream response must raise');
+        self::assertSame(
+            PdftractException::class,
+            get_class($exception),
+            'the rejection must travel through the shared builder, status mapping included',
+        );
+
+        self::assertSame(
+            [
+                ['debug', 'Executing pdftract stream request'],
+                ['error', 'pdftract request failed'],
+                ['debug', 'Abandoning pdftract stream'],
+            ],
+            $logger->messages(),
+        );
+
+        $errorContext = $logger->records[1]['context'];
+        self::assertSame($this->server->baseUri() . '/extract/stream', $errorContext['url']);
+        self::assertSame(500, $errorContext['status']);
+        self::assertSame('INTERNAL_ERROR', $errorContext['error']);
+    }
+
+    #[Group('psr3-logging')]
+    public function test_a_stream_that_dies_mid_transfer_logs_the_transport_failure(): void
+    {
+        // The stream route's transport-failure record — the twin of the
+        // buffered suite's (tests/ClientPsr3LoggerTest.php): a transfer that
+        // ends short of its declared body logs the stream-specific
+        // 'pdftract stream request failed' entry carrying the underlying
+        // curl error, the ConnectionException's own reason, before the
+        // exception escapes and the finally adds the abandon record. No
+        // status exists to log, exactly as on the buffered routes. The idle
+        // bound is disabled so the failure can only be the short transfer.
+        $logger = new RecordingStreamLogger();
+
+        $records = \array_slice(self::PAGE_RECORDS, 0, 2);
+        $declared = strlen(implode('', $this->ndjsonLines($records))) + 500;
+
+        $this->server->enqueue(
+            ScriptedResponse::chunked('/extract/stream', $this->ndjsonChunks($records))
+                ->withHeader('Content-Length', (string)$declared)
+                ->named('stream cut short'),
+        );
+
+        $client = new Client($this->server->baseUri(), null, $logger, 12.0);
+
+        $exception = null;
+
+        try {
+            iterator_to_array($client->extractStream(Source::bytes(self::PDF_BYTES), ['timeout' => 0]), false);
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertInstanceOf(ConnectionException::class, $exception, 'a stream cut short of its declared body must raise');
+
+        self::assertSame(
+            [
+                ['debug', 'Executing pdftract stream request'],
+                ['error', 'pdftract stream request failed'],
+                ['debug', 'Abandoning pdftract stream'],
+            ],
+            $logger->messages(),
+        );
+
+        $errorContext = $logger->records[1]['context'];
+        self::assertSame($this->server->baseUri() . '/extract/stream', $errorContext['url']);
+        self::assertNotSame('', $errorContext['error'], 'the underlying transport error must be carried');
+    }
+
     // --------------------------------------------------------------- helpers
 
     /**
@@ -881,5 +1225,39 @@ final class ClientStreamingRouteTest extends TestCase
         if (!extension_loaded('curl')) {
             self::markTestSkipped('The curl extension is required for the HTTP client.');
         }
+    }
+}
+
+/**
+ * PSR-3 logger that keeps every record for assertion
+ *
+ * The streaming suite's twin of the buffered suite's RecordingLogger
+ * (tests/ClientBufferedRouteTest.php) — deliberately a separate class so a
+ * stream test that reached for the buffered logger by accident would fail
+ * rather than silently share state.
+ */
+class RecordingStreamLogger extends AbstractLogger
+{
+    /** @var array<int, array{level: string, message: string, context: array}> */
+    public array $records = [];
+
+    public function log($level, \Stringable|string $message, array $context = []): void
+    {
+        $this->records[] = [
+            'level' => (string)$level,
+            'message' => (string)$message,
+            'context' => $context,
+        ];
+    }
+
+    /**
+     * @return array<int, array{0: string, 1: string}> level/message pairs, in order
+     */
+    public function messages(): array
+    {
+        return array_map(
+            static fn (array $record): array => [$record['level'], $record['message']],
+            $this->records,
+        );
     }
 }

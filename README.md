@@ -81,8 +81,15 @@ The default suite enforces the PSR-3 logging contract (log levels, entry
 shape, request/response/error logging on `Client`) — there is no separate
 script to remember. The dedicated cases live in
 `tests/ClientPsr3LoggerTest.php`, with the buffered route's request/error
-entries pinned in `tests/ClientBufferedRouteTest.php`; `--group psr3-logging`
-runs just the logging cases. The standalone verifier that preceded this
+entries pinned in `tests/ClientBufferedRouteTest.php` and the streaming
+route's in `tests/ClientStreamingRouteTest.php` — the streamed entries pin
+the execution debug record with its idle bound, the abandon record a
+dropped or failing generator emits, and the idle-bound, in-band-error,
+rejected-status, and transport-failure records; `--group psr3-logging`
+runs just the logging cases. The route-agnostic pins — the null-logger
+default and the contract holding for *any* PSR-3 implementation — stay in
+`tests/ClientPsr3LoggerTest.php` rather than being re-held per route. The
+standalone verifier that preceded this
 coverage, `tests/Retired/verify_psr3_logger.php`, drove the retired CLI
 subprocess transport and is kept only as a record — the suite never executes
 it.
