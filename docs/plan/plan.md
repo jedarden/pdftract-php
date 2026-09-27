@@ -129,10 +129,22 @@ Concretely:
   six-way `proc_open` duplication goes away by construction.
 - Streaming endpoints (`extractStream`, `search`) use chunked HTTP reads
   instead of reading subprocess stdout line-by-line.
-- The generated `Models`/`Codegen` exception tree is kept (it's a reasonable
-  representation of the API's data shapes) but regenerated/audited against
-  the actual HTTP OpenAPI schema `pdftract --serve` exposes, rather than
-  the CLI's JSON output shape, since the two are not guaranteed identical.
+- The model/exception tree (`src/Models/` plus the exception hierarchy at
+  the `src/` root) is kept — it's a reasonable representation of the API's
+  data shapes — but verified against what `pdftract --serve` actually
+  exposes, not the CLI's JSON output shape, since the two are not
+  guaranteed identical. The original wording — regenerate/audit "against
+  the actual HTTP OpenAPI schema `pdftract --serve` exposes" — is void: at
+  pinned upstream revision `eeab77e` no such schema exists, the serve API
+  being a hand-routed axum `Router` with no OpenAPI-generating crate
+  (`docs/notes/serve-parity-gap.md` § "OpenAPI finding"), and following it
+  would mean fabricating a schema rather than generating against one
+  (`docs/notes/codegen-stubs-resolution.md`, which resolved the `Codegen`
+  stubs by deletion on that basis). Verification rests on what does exist:
+  the serve-route parity gap matrix in `docs/notes/serve-parity-gap.md`
+  with its 2026-09-26 `markdown_anchors` and 2026-09-27 route-parity
+  empirical addenda, plus the request-shape pins in
+  `tests/ClientBufferedRouteTest.php` and `tests/ClientStreamingRouteTest.php`.
 - The conformance-suite path bug is fixed as part of this work (fixtures
   vendored into this repo, or fetched from the `pdftract` repo's release
   artifacts — not read via `../../../../` relative to a monorepo layout that
