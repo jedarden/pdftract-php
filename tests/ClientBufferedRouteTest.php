@@ -743,6 +743,7 @@ final class ClientBufferedRouteTest extends TestCase
 
     // ---------------------------------------------------------------- logging
 
+    #[Group('psr3-logging')]
     public function test_a_buffered_request_and_its_failure_are_logged(): void
     {
         $logger = new RecordingLogger();

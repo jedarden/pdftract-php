@@ -77,6 +77,16 @@ composer install
 ./vendor/bin/phpunit
 ```
 
+The default suite enforces the PSR-3 logging contract (log levels, entry
+shape, request/response/error logging on `Client`) — there is no separate
+script to remember. The dedicated cases live in
+`tests/ClientPsr3LoggerTest.php`, with the buffered route's request/error
+entries pinned in `tests/ClientBufferedRouteTest.php`; `--group psr3-logging`
+runs just the logging cases. The standalone verifier that preceded this
+coverage, `tests/Retired/verify_psr3_logger.php`, drove the retired CLI
+subprocess transport and is kept only as a record — the suite never executes
+it.
+
 ## License
 
 MIT License - see LICENSE file for details.
