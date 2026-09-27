@@ -75,6 +75,9 @@ composer install
 
 # Run tests
 ./vendor/bin/phpunit
+
+# Run the real-server suite against a serve-capable pdftract binary
+PDFTRACT_SERVE_BIN=/path/to/pdftract ./vendor/bin/phpunit --group real-server
 ```
 
 The default suite enforces the PSR-3 logging contract (log levels, entry
@@ -93,6 +96,27 @@ standalone verifier that preceded this
 coverage, `tests/Retired/verify_psr3_logger.php`, drove the retired CLI
 subprocess transport and is kept only as a record — the suite never executes
 it.
+
+Three suites are gated on a real pdftract binary and skip cleanly (with a
+message, never a failure) when none is configured, so a plain run stays
+green with no build:
+
+- `tests/ClientBinaryConformanceTest.php` (group `binary-conformance`) —
+  runs when `PDFTRACT_BIN` points at a pdftract binary, and exercises the
+  retired CLI-subprocess conformance cases against it.
+- `tests/ClientServeParityTest.php` (group `serve-parity`) — runs when
+  `PDFTRACT_SERVE_BIN` points at one binary, and pins each covered serve
+  route's output against its CLI equivalent with the SDK as the third
+  party in every comparison.
+- `tests/ClientRealServerTest.php` (group `real-server`) — runs when
+  `PDFTRACT_SERVE_BIN` points at a serve-capable binary, and drives the
+  canonical HTTP client through a live `pdftract --serve` process: the
+  buffered and streaming POST routes, the real multipart parser's
+  rejections, real NDJSON chunk framing, and the idle bound on both sides.
+  A binary whose serve surface is broken (the stock conformance binaries'
+  documented ConnectInfo defect — see
+  `docs/notes/serve-parity-gap.md`, Addendum 2026-09-27c) skips the suite
+  with the diagnosis rather than failing it.
 
 ## License
 
