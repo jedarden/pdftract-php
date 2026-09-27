@@ -17,8 +17,9 @@
   flag has any observable effect on a serve response, were deferred to the
   conformance work. The `markdown_anchors` question has since been answered
   empirically — see **Addendum 2026-09-26** below; the route-level behavioural
-  parity of the covered routes is still untested. This file is the route
-  inventory the ADR-1 amendment rests on.
+  parity of the covered routes has since been probed the same way — see
+  **Addendum 2026-09-27** below. This file is the route inventory the ADR-1
+  amendment rests on.
 
 ## The commitment being evidenced
 
@@ -58,9 +59,9 @@ Multipart form fields accepted by every POST route (`receive_pdf`,
 ## The 9-row parity matrix
 
 Status legend: **COVERED** = a serve route exists whose transport matches the
-method's contract (shape/behaviour parity still untested — conformance work).
-**GAP** = no serve route exists. **OPEN** = verdict deliberately not recorded;
-empirical check pending.
+method's contract (shape/behaviour parity probed in **Addendum 2026-09-27** —
+parity must not be inferred from the status alone). **GAP** = no serve route
+exists. **OPEN** = verdict deliberately not recorded; empirical check pending.
 
 | # | SDK method | CLI subcommand equivalent | Serve route | Status | Source evidence |
 |---|---|---|---|---|---|
@@ -303,6 +304,116 @@ response) and nothing else — it is a dead option over HTTP until upstream adds
 a markdown serve representation. The SDK should not promise, document, or test
 any behavioural effect of `markdown_anchors` on a serve response; the
 `Client::extract()` forwarding docblock records this.
+
+## Addendum 2026-09-27 — route-level behavioural parity of the three COVERED routes (empirical, failure domain)
+
+This records the serve-vs-CLI behavioural probe the original audit deferred —
+the question behind the three COVERED rows. Upstream revision: the same probe
+build as Addendum 2026-09-26 (`eeab77e` plus its disclosed patches), with two
+additional **stderr-only PROBE diagnostics** (one printing the error chain in
+`main.rs`'s extract dispatch, one printing a first-page error inside
+`pdftract-core/src/extract.rs`'s page-collect loop if one ever arrives). The
+two commits after `eeab77e` (`69b8ba851`, then `a2ed4c96` — current upstream
+HEAD, 2026-09-26) touch only `templates/sdk-skeleton/swift/*` — 5 files across
+the whole range, nothing under `crates/` — so `eeab77e` and HEAD are
+behaviourally identical for every route and CLI mode probed here.
+Bead: `pdfphp-5f2310e5`.
+
+**What was run.** Twelve vendored fixtures
+(`invoice/01.pdf`, `contract/01.pdf`, `misc/01.pdf`, `scientific_paper/01.pdf`,
+`code/code.pdf`, `fillable-form/form.pdf`, `mixed/mixed.pdf`,
+`vertical/vertical.pdf`, `xmp/xmp-metadata.pdf`, `large/50pages.pdf`,
+`encrypted/encrypted.pdf`, `broken/corrupt.pdf`), each driven through:
+
+- the CLI, exactly as a terminal user runs it: `pdftract extract <file>
+  --json -`, `… --text -`, and `… --ndjson` (note `--ndjson` is a **boolean
+  flag** writing NDJSON to stdout — it takes no `-` PATH argument; passing one
+  is a clap usage error, rc=2, which is how a first pass of this probe ran it);
+- the serve routes, raw multipart POSTs with curl and no SDK:
+  `POST /extract`, `POST /extract/text`, `POST /extract/stream` — 36
+  responses;
+- the same three routes a third time through the canonical HTTP client, as
+  executable PHPUnit pins: `tests/ClientServeParityTest.php` (group
+  `serve-parity`, env `PDFTRACT_SERVE_BIN=<binary>`), which asserts the
+  serve↔CLI, SDK↔serve, and SDK↔CLI layers per fixture and route and skips
+  when no binary is configured. Executed against the probe binary on
+  2026-09-27: **36 tests, 468 assertions, green** — every failure-domain
+  assertion live; the success-domain branches cannot fire at this revision
+  and remain the forward pin.
+
+**The two failure classes.** Every fixture fails on both surfaces at this
+revision, in exactly two classes that correlate with fixture structure, not
+with route or mode:
+
+- **Class A — catalog parses, page iteration ends empty** (the four
+  1.8–2.5 KB fixtures: `invoice/01`, `contract/01`, `misc/01`,
+  `scientific_paper/01`): CLI rc=1 with the root cause `Document contains no
+  pages` on stderr and 0 bytes on stdout.
+- **Class B — catalog-level defect, parse fails before pages** (the other
+  eight, all failing identically): root cause `No /Root reference in trailer`.
+  None of the twelve fixtures carries `/Encrypt`; the fixture vendored as
+  `encrypted/encrypted.pdf` is a 582-byte stub whose `/Root` points at a
+  missing object, so it lands in this class rather than exercising any
+  password path (consistent with the ancillary finding that serve could not
+  honour one anyway).
+
+**Results — buffered routes (`POST /extract` ↔ `--json -`,
+`POST /extract/text` ↔ `--text -`).** The 24 buffered responses collapse to
+exactly 2 distinct bodies — the 422
+`{"error":"EXTRACTION_ERROR","message":"<root cause>"}` per class. For **12 of
+12 fixtures the serve `message` is byte-identical to the CLI's stderr root
+cause**, both surfaces fail together, and the CLI's failure surface is
+identical across its own output modes (rc=1, empty stdout, root cause on
+stderr). **Verdict: equivalent on the failure domain.** The one asymmetry is
+vocabulary, not behaviour: the CLI has no machine-readable error-code channel,
+so `EXTRACTION_ERROR` exists only on the serve side.
+
+**Results — stream route (`POST /extract/stream` ↔ `--ndjson`).** Root-cause
+parity is exact here too (12/12), but the channel **diverges structurally**,
+and this is pinned rather than smoothed over:
+
+- the CLI fails identically in every mode: rc=1, 0 bytes on stdout, root
+  cause on stderr;
+- serve answers **HTTP 200** (not 422) with a single newline-terminated
+  in-band NDJSON record `{"error":"<root cause>"}` — no `message` field, no
+  error code;
+- consequently the SDK surfaces differ: the buffered 422 maps to
+  `ValidationException` carrying the status and the `EXTRACTION_ERROR` code,
+  while the in-band record maps to the base `PdftractException` with a null
+  status and a null error code (`Client::decodeRecord()`).
+
+**Verdict: equivalent in root cause, deliberately divergent channel** — a
+client branching on exception type or error code behaves differently on the
+stream route than a CLI script branching on exit status. The PHPUnit pins
+assert the divergence explicitly so an upstream change to it (say, the stream
+route adopting the buffered error body) fails loudly here first.
+
+**Success domain: unreachable at the pinned revision.** Extraction fails for
+every fixture in every mode, so successful-response parity (the JSON payload,
+the text body, the NDJSON record sequence) remains unpinned. The PHPUnit
+success branches are the forward pin: they execute and enforce byte-level
+serve↔CLI equality the moment a binary that can actually extract is supplied
+(upstream defect — see the mechanism refinement below — not a serve-side
+property; nothing in the route code suggests a success-domain divergence, but
+that stays a static impression until the forward pin can run).
+
+**Mechanism refinement to Addendum 2026-09-26.** That addendum attributed the
+uniform failure to `LazyPageIter`'s first page error being swallowed at
+`extract.rs:746-752` (`Some(Err(_)) | None => break`). With the PROBE
+diagnostic inside that match arm, **no `Err` ever arrives for the Class A
+fixtures: the iterator yields `None` cleanly**. The swallow site is real — it
+does not distinguish "end of pages" from "error", so upstream still hides the
+underlying cause — but the observed mechanism is "the page iterator ends
+empty without surfacing an error", not "an error is swallowed". The
+uniform-failure conclusion of Addendum 2026-09-26 is unaffected.
+
+**Consequence for the matrix.** Rows 1, 2, and 4 stay COVERED, now with
+demonstrated failure-domain behaviour behind the claim instead of route
+existence alone: rows 1 and 2 equivalent (serve message ≡ CLI root cause,
+12/12), row 4 equivalent-in-cause with the in-band 200/error-record divergence
+pinned. Success-domain parity is the residual gap, gated on the upstream
+page-iterator defect (bf-4bd's territory), with executable forward pins
+waiting in `tests/ClientServeParityTest.php`.
 
 ## Ancillary finding — serve cannot process encrypted PDFs
 
