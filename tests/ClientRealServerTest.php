@@ -16,9 +16,10 @@ use PHPUnit\Framework\TestCase;
 /**
  * Real-server integration for the canonical HTTP client: the routes of a
  * live `pdftract --serve` (axum) process — the three POST routes driven
- * end to end through {@see Client}, and the two GET routes pinned at the
- * wire (the root banner and the /extract file-path guard have no client
- * surface: the client is POST-only) — with no fixture in between.
+ * end to end through {@see Client}, and the three GET routes pinned at
+ * the wire (the root banner, the /extract file-path guard, and /health
+ * have no client surface: the client is POST-only) — with no fixture in
+ * between.
  *
  * The suite closes the gap between the two loops the rest of the coverage
  * lives in, which never meet: the loopback fixture harness
@@ -229,6 +230,40 @@ final class ClientRealServerTest extends TestCase
             $body['endpoints'] ?? null,
             "the banner must advertise exactly the documented routes, in the server's own order",
         );
+    }
+
+    public function test_the_health_route_answers_the_documented_ok_banner(): void
+    {
+        // GET /health (serve.rs health_handler) is the route the startup
+        // gate polls, but the gate only captures its answer into
+        // self::$healthBanner for the other tests to cross-check — the
+        // route's own contract is pinned here, alongside the other GET
+        // pins: a fixed 200 JSON with no failure mode, whose body is
+        // exactly the two documented fields — `status: "ok"` and the
+        // binary's own package version. That version is a compile-time
+        // constant, so the live wire must agree with the banner the gate
+        // captured (and, via the root-route pin, with GET / as well).
+        //
+        // The whole-body assertSame below is order-sensitive, and the
+        // wire's keys come back alphabetized (serde_json's BTreeMap — the
+        // reason the root-route pin is per-field). Here the two keys are
+        // already alphabetical in the handler's own order (`status` <
+        // `version`), so the live order always matches this literal — and
+        // any added, dropped, or renamed field fails the comparison,
+        // which is the pin.
+        $wire = $this->getWire('/health');
+
+        self::assertSame(200, $wire['status'], 'the health route is a fixed 200 — it has no failure mode');
+        self::assertSame('application/json', $wire['contentType'], $wire['body']);
+
+        $body = self::decodeJsonObject('/health', $wire['body']);
+
+        self::assertSame(
+            ['status' => 'ok', 'version' => self::$healthBanner['version'] ?? null],
+            $body,
+            'the health body is exactly the two documented fields',
+        );
+        self::assertNotSame('', $body['version'], 'the version must be non-empty');
     }
 
     public function test_the_get_extract_guard_rejects_file_path_queries_with_the_only_json_404(): void
@@ -804,11 +839,11 @@ final class ClientRealServerTest extends TestCase
     /**
      * GET a route on the live server, with no SDK in between
      *
-     * The wire probe for the two GET routes — the root banner on `/`, the
-     * file-path guard on `GET /extract`. The client's surface is
-     * POST-only, so those routes have no client leg to assert: the
-     * server's own answer is the whole contract, returned in the same
-     * shape the POST probes return.
+     * The wire probe for the three GET routes — the root banner on `/`,
+     * the file-path guard on `GET /extract`, the health banner on
+     * `/health`. The client's surface is POST-only, so those routes have
+     * no client leg to assert: the server's own answer is the whole
+     * contract, returned in the same shape the POST probes return.
      *
      * @return array{status: int, body: string, contentType: ?string}
      */
@@ -912,7 +947,7 @@ final class ClientRealServerTest extends TestCase
         $decoded = json_decode($body, true);
 
         if (!is_array($decoded)) {
-            self::fail("POST {$route} did not answer a JSON object: " . json_last_error_msg() . ' — body: ' . substr($body, 0, 200));
+            self::fail("{$route} did not answer a JSON object: " . json_last_error_msg() . ' — body: ' . substr($body, 0, 200));
         }
 
         return $decoded;
