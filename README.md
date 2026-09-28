@@ -8,7 +8,10 @@ PHP SDK for the pdftract PDF processing service.
 > `composer require jedarden/pdftract` will not resolve. Install it from the
 > source repository as shown below.
 
-Add the repository to your project's `composer.json`, then require the package:
+Add the repository to your project's `composer.json`, then require the
+package. Pin a tagged release — `"^0.1.0"` resolves from the `0.1.0` tag and
+installs cleanly in projects that require stable packages, with no
+`minimum-stability` override needed:
 
 ```json
 {
@@ -19,7 +22,7 @@ Add the repository to your project's `composer.json`, then require the package:
         }
     ],
     "require": {
-        "jedarden/pdftract": "dev-main"
+        "jedarden/pdftract": "^0.1.0"
     }
 }
 ```
@@ -28,10 +31,11 @@ Add the repository to your project's `composer.json`, then require the package:
 composer update jedarden/pdftract
 ```
 
-There are no tagged releases yet, so `dev-main` is the only available
-constraint. Depending on it means your project needs
-`"minimum-stability": "dev"` (with `"prefer-stable": true`) or an explicit
-`dev-main` alias.
+To follow the latest work on `main` instead of a tagged release, require
+`"jedarden/pdftract": "dev-main"`. Depending on the tracking branch means
+your project needs `"minimum-stability": "dev"` (with
+`"prefer-stable": true`) or an explicit `dev-main` alias — prefer a tagged
+release when you just want a working install.
 
 The repository requires authentication. Store a Gitea access token once:
 
