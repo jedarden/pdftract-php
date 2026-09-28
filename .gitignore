@@ -2,3 +2,11 @@ vendor/
 .DS_Store
 *.log
 .phpunit.result.cache
+
+# Binary-gated-suite scratch: regenerable pdftract build trees the
+# SERVE_BIN suites run against. The maintained build path is
+# scripts/build-serve-bin.sh; both directories can be deleted and rebuilt.
+# .probe-parity/ holds the docs/notes/serve-parity-gap.md addenda's probe
+# transcripts; .serve-main/ is the superseded hand-built extraction tree.
+.probe-parity/
+.serve-main/

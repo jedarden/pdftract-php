@@ -23,37 +23,47 @@ use PHPUnit\Framework\TestCase;
  * Three layers are asserted per fixture and route, so a break localises:
  *
  * 1. serve ↔ CLI    — a raw multipart POST (curl, no SDK) must agree with
- *                     the CLI subprocess: same verdict (both fail or both
- *                     succeed), and on failure the response's error text
- *                     equals the CLI's root-cause line — as the buffered
- *                     body's `message` field for /extract and /extract/text,
- *                     as the in-band NDJSON record's `error` field for
- *                     /extract/stream. This is the empirical half of the
- *                     parity matrix's COVERED rows (docs/notes/
- *                     serve-parity-gap.md, Addendum 2026-09-27).
+ *                     the CLI subprocess on the verdict (both fail or both
+ *                     succeed) and, on failure, on the error text: the
+ *                     buffered body's `message` field for /extract and
+ *                     /extract/text, the in-band NDJSON record's `error`
+ *                     field for /extract/stream. On success the surfaces
+ *                     agree on CONTENT, not bytes — each route is served by
+ *                     two writers that genuinely diverge (the --json
+ *                     serializers differ in layout, the --text writers and
+ *                     the NDJSON schemas differ outright), so each writer
+ *                     is pinned against the extraction's canonical JSON
+ *                     value and the divergence itself is the pin
+ *                     (Addendum 2026-09-27e). This is the empirical half of
+ *                     the parity matrix's COVERED rows (docs/notes/
+ *                     serve-parity-gap.md).
  * 2. SDK ↔ serve    — the exception the client raises must carry the wire's
  *                     fields unchanged: class from the status (422 →
- *                     ValidationException), error code and message verbatim.
- * 3. SDK ↔ CLI      — the client's message equals the CLI's root cause, so
- *                     an SDK caller sees what a CLI caller would have read
- *                     off the terminal.
+ *                     ValidationException), error code and message verbatim;
+ *                     in-band stream records must surface on the base class.
+ * 3. SDK ↔ CLI      — in the failure domain the client's message equals the
+ *                     CLI's root cause, so an SDK caller sees what a CLI
+ *                     caller would have read off the terminal; on success
+ *                     both surfaces are pinned to the one canonical
+ *                     document, which is the closest parity that exists.
  *
  * The binary comes from the environment:
  *
  * - PDFTRACT_SERVE_BIN — one pdftract binary, used for BOTH roles (the serve
  *   process it spawns and the CLI subprocess), so the two surfaces compared
- *   are the same code. Unset: every test skips with a message. The probe
- *   binary recorded in Addendum 2026-09-27 was built from upstream eeab77e
- *   plus three disclosed, response-inert patches (two axum service-
- *   construction call sites so the ConnectInfo extractor does not panic, and
- *   two stderr-only PROBE diagnostics); its successor a2ed4c96 touches only
- *   Swift templates, so the two revisions are behaviourally identical here.
- *   At that revision extraction fails for every document — the page
- *   iterator ends empty without surfacing an error (the PROBE diagnostic
- *   shows no Err ever reaches the collect loop, refining Addendum
- *   2026-09-26's swallow claim) — so the failure branches below are the ones
- *   that run; the success branches are the forward pin and light up if a
- *   later binary can actually extract.
+ *   are the same code. Unset: every test skips with a message.
+ *   scripts/build-serve-bin.sh builds and smoke-gates a serve-capable one:
+ *   upstream resolved the ConnectInfo serve defect after the conformance
+ *   revision eeab77e — both axum::serve call sites now serve through
+ *   into_make_service_with_connect_info — and extraction succeeds, so the
+ *   success branches below run (Addendum 2026-09-27e). Those branches were
+ *   authored at eeab77e as forward pins asserting byte-level serve↔CLI
+ *   equality, at a revision where extraction failed for every document and
+ *   only the failure branches could execute; when a binary that could
+ *   actually extract finally ran them, the prediction was falsified — no
+ *   upstream route shares a success-domain byte format with its CLI
+ *   equivalent — and the pins were re-authored to the measured contract
+ *   rather than kept as a prediction.
  *
  * The serve lifecycle is owned here: one instance per process, bound to an
  * ephemeral 127.0.0.1 port, polled healthy before any assertion, terminated
@@ -88,7 +98,7 @@ final class ClientServeParityTest extends TestCase
 
     private const FIXTURES_PATH = __DIR__ . '/sdk-conformance/fixtures/';
 
-    /** Seconds granted to each CLI subprocess (server-side extraction at this revision fails in milliseconds). */
+    /** Seconds granted to each CLI subprocess (bounds pathology; full extractions run well inside it). */
     private const CLI_TIMEOUT_SECONDS = 60;
 
     /** Seconds to wait for GET /health to answer before failing. */
@@ -226,8 +236,9 @@ final class ClientServeParityTest extends TestCase
                 "serve/CLI parity break ({$fixture} {$format}): the body's message must be the CLI's root cause"
             );
 
-            // The error domain at the pinned revision: both buffered routes
-            // report EXTRACTION_ERROR regardless of payload format.
+            // The error domain (forward pin — no current fixture fails;
+            // measured at eeab77e): both buffered routes report
+            // EXTRACTION_ERROR regardless of payload format.
             $this->assertSame(
                 'EXTRACTION_ERROR',
                 self::serveErrorCode($serve['body']),
@@ -255,47 +266,102 @@ final class ClientServeParityTest extends TestCase
             return;
         }
 
-        // Success domain — the forward pin. It cannot execute at the pinned
-        // revision (extraction fails for every document); when a binary that
-        // can extract is supplied, the serve body must be byte-identical to
-        // the CLI's stdout and the SDK result must be its faithful decode.
+        // Success domain — live since the serve-capable build (upstream
+        // resolved both the ConnectInfo serve defect and the extraction
+        // failure; scripts/build-serve-bin.sh produces the binary,
+        // Addendum 2026-09-27e). The two surfaces agree on content, not
+        // bytes: the CLI pretty-prints JSON while serve compacts it, and
+        // the --text writers differ outright (see the text arm below), so
+        // parity is pinned on the extracted value, never on byte layouts.
         $this->assertSame(200, $serve['status'], "serve must succeed when the CLI succeeds ({$fixture} {$format})");
         $this->assertNull($sdkException, "client must not raise when the CLI succeeds ({$fixture} {$format})");
         $this->assertNotNull($sdkResult);
 
-        $this->assertSame(
-            $cli['stdout'],
-            $serve['body'],
-            "serve/CLI parity break ({$fixture} {$format}): bodies differ"
-        );
-
         if ($format === '--json') {
+            // The decoded-value pins ARE the --json parity pin: the same
+            // document from both serializers — the CLI pretty-prints JSON
+            // while serve compacts it, and that byte-layout divergence is
+            // the documented one. JSON objects are unordered, so the
+            // decoded comparison normalizes key layout away.
+            $document = self::normalizeJsonValue(self::decodeJson($serve['body']));
             $this->assertSame(
-                self::decodeJson($cli['stdout']),
-                $sdkResult,
-                "SDK/CLI parity break ({$fixture} --json): the decoded client result must equal the CLI's JSON"
+                $document,
+                self::normalizeJsonValue(self::decodeJson($cli['stdout'])),
+                "serve/CLI parity break ({$fixture} {$format}): the CLI's JSON decodes differently from the serve body"
             );
-        } else {
             $this->assertSame(
-                $cli['stdout'],
-                $sdkResult,
-                "SDK/CLI parity break ({$fixture} --text): the client must return the CLI's text verbatim"
+                $document,
+                self::normalizeJsonValue($sdkResult),
+                "SDK/serve break ({$fixture} {$format}): the client's result must be the serve body's faithful decode"
             );
+
+            return;
         }
+
+        // --text: two writers over the one extraction, neither a byte
+        // function of the other, and neither surface's body is JSON — so
+        // the canonical document comes from a second POST /extract (the
+        // same source the stream test pins against). Serve concatenates
+        // every span's text with a newline (serve.rs extract_text_handler);
+        // the CLI runs serialize_document_text — blocks joined "\n\n",
+        // pages joined "\f", header/footer/watermark blocks excluded,
+        // figures empty (pdftract-core/src/text.rs). Each writer is pinned
+        // against the canonical document, and the writers' divergence is
+        // the pin: for the four fixtures with no spans both bodies are the
+        // empty string, and for every other fixture they differ (e.g.
+        // "Broken PDF" vs "Broken PDF\n").
+        $canonicalResponse = $this->postMultipart('/extract', $path);
+        $this->assertSame(
+            200,
+            $canonicalResponse['status'],
+            "POST /extract must supply the canonical document ({$fixture} {$format})"
+        );
+        $document = self::normalizeJsonValue(self::decodeJson($canonicalResponse['body']));
+
+        $this->assertSame(
+            self::serveTextFromDocument($document),
+            $serve['body'],
+            "serve/CLI parity break ({$fixture} --text): the serve text must be the document's span lines"
+        );
+        $this->assertSame(
+            self::cliTextFromDocument($document),
+            $cli['stdout'],
+            "serve/CLI parity break ({$fixture} --text): the CLI text must be the document's block serialization"
+        );
+        $this->assertSame(
+            $serve['body'],
+            $sdkResult,
+            "SDK/serve break ({$fixture} --text): the client must return the wire's body verbatim"
+        );
     }
 
     /**
      * One fixture, the streaming route, three layers of parity.
      *
-     * The stream route's failure domain is deliberately pinned as a
-     * divergence from the buffered shape: the CLI fails with rc=1, empty
-     * stdout and the root cause on stderr for EVERY output mode, while the
-     * serve stream answers HTTP 200 with a single in-band NDJSON error
-     * record carrying only `error` — no 422, no error code, no `message`
-     * field. Same root cause, structurally different channel; the SDK maps
-     * that record to the base {@see PdftractException} with no status and
-     * no error code (decodeRecord), where the buffered routes' 422 maps to
+     * The failure domain is deliberately pinned as a divergence from the
+     * buffered shape: the CLI fails with rc=1, empty stdout and the root
+     * cause on stderr for EVERY output mode, while the serve stream answers
+     * HTTP 200 with a single in-band NDJSON error record carrying only
+     * `error` — no 422, no error code, no `message` field. Same root cause,
+     * structurally different channel; the SDK maps that record to the base
+     * {@see PdftractException} with no status and no error code
+     * (decodeRecord), where the buffered routes' 422 maps to
      * {@see ValidationException} carrying both.
+     *
+     * The success domain is a second, deeper divergence (Addendum
+     * 2026-09-27e): the two surfaces do not even share a record schema. The
+     * serve stream emits one PAGE record per page — the buffered route's
+     * `pages[].{index,spans,blocks,tables}`, each optionally carrying an
+     * in-band per-page `error` diagnostic string the buffered pages never
+     * have — while the CLI's `--ndjson` emits one BLOCK record per block
+     * (`{page, block_index, kind, bbox, spans[{text,font,size,bbox}]}`,
+     * main.rs's Format::Ndjson arm). Record counts legitimately differ (a
+     * page with no blocks yields one serve record and no CLI record), so
+     * each surface is pinned against the buffered route's canonical
+     * document rather than against each other, and the SDK layer is pinned
+     * to decodeRecord's real semantics: a record carrying `error` aborts
+     * the stream on the base exception, byte-identical message, with every
+     * record before it already yielded.
      */
     #[DataProvider('streamFixtureProvider')]
     public function testStreamRouteOutputMatchesTheCliOnTheSameFixture(string $fixture): void
@@ -305,8 +371,11 @@ final class ClientServeParityTest extends TestCase
 
         $cli = $this->runCli(['--ndjson'], $path);
 
-        // Layer 1a — the raw serve response, no SDK in between.
+        // Layer 1a — the raw serve responses, no SDK in between: the stream
+        // body under test, plus the buffered route's canonical document the
+        // success-domain writers are pinned against.
         $serve = $this->postMultipart('/extract/stream', $path);
+        $buffered = $this->postMultipart('/extract', $path);
 
         // Layer 2 — the SDK client on the same route, same fixture.
         $client = new Client(self::$baseUrl);
@@ -375,12 +444,26 @@ final class ClientServeParityTest extends TestCase
             return;
         }
 
-        // Success domain — the forward pin. It cannot execute at the pinned
-        // revision (extraction fails for every document); when a binary that
-        // can extract is supplied, the serve body's records must equal the
-        // CLI's stdout records and the SDK must yield each of them decoded.
+        // Success domain — live since the serve-capable build (Addendum
+        // 2026-09-27e). The two surfaces do not share a record schema, so
+        // each is pinned against the buffered route's canonical document:
+        // serve's page records equal the document's pages array (plus the
+        // optional in-band `error` diagnostic per page), the CLI's block
+        // records equal the document's blocks flattened through its own
+        // Ndjson writer, and the SDK layer follows decodeRecord's real
+        // abort semantics on the first error-bearing record.
         $this->assertSame(200, $serve['status'], "serve must succeed when the CLI succeeds ({$fixture} stream)");
-        $this->assertNull($sdkException, "client must not raise when the CLI succeeds ({$fixture} stream)");
+        $this->assertStringEndsWith("\n", $serve['body'], "the stream body must be newline-terminated ({$fixture})");
+        $this->assertSame(200, $buffered['status'], "POST /extract must succeed on the stream fixture ({$fixture})");
+
+        $document = self::normalizeJsonValue(self::decodeJson($buffered['body']));
+
+        $wireRecords = [];
+        foreach (explode("\n", $serve['body']) as $line) {
+            if (trim($line) !== '') {
+                $wireRecords[] = self::decodeJson($line);
+            }
+        }
 
         $cliRecords = [];
         foreach (explode("\n", $cli['stdout']) as $line) {
@@ -389,22 +472,71 @@ final class ClientServeParityTest extends TestCase
             }
         }
 
-        $serveRecords = [];
-        foreach (explode("\n", $serve['body']) as $line) {
-            if (trim($line) !== '') {
-                $serveRecords[] = self::decodeJson($line);
+        // serve side: one page record per page. An in-band `error` on a
+        // page record is the stream's per-page diagnostic channel — the
+        // buffered pages never carry it — so it is stripped (after pinning
+        // its type) before the record must equal the buffered page.
+        $strippedWireRecords = [];
+        $firstErrorIndex = null;
+
+        foreach ($wireRecords as $index => $record) {
+            if (array_key_exists('error', $record)) {
+                $this->assertIsString(
+                    $record['error'],
+                    "a stream page record's in-band error must be a string ({$fixture})"
+                );
+
+                if ($firstErrorIndex === null) {
+                    $firstErrorIndex = $index;
+                }
+
+                unset($record['error']);
             }
+
+            $strippedWireRecords[] = $record;
         }
 
         $this->assertSame(
-            $cliRecords,
-            $serveRecords,
-            "serve/CLI parity break ({$fixture} stream): the streamed records differ from the CLI's NDJSON"
+            $document['pages'],
+            self::normalizeJsonValue($strippedWireRecords),
+            "serve/CLI parity break ({$fixture} stream): the streamed page records must be the buffered pages plus their in-band error diagnostics"
         );
+
+        // CLI side: one block record per block, shaped by the CLI's own
+        // Format::Ndjson writer over the same document.
         $this->assertSame(
-            $cliRecords,
+            self::normalizeJsonValue(self::cliNdjsonRecordsFromDocument($document)),
+            self::normalizeJsonValue($cliRecords),
+            "serve/CLI parity break ({$fixture} stream): the CLI's block records must be the document's blocks"
+        );
+
+        // SDK ↔ serve: every record before the first error-bearing one must
+        // have been yielded decoded; the error-bearing record itself must
+        // abort the stream on the base class with the error verbatim and no
+        // status (nothing failed at the HTTP layer). With no error-bearing
+        // record the whole stream must arrive and the client must not raise.
+        $records = self::normalizeJsonValue($records);
+
+        if ($firstErrorIndex !== null) {
+            $this->assertNotNull($sdkException, "an in-band error record must terminate the stream with an exception ({$fixture})");
+            $this->assertSame(PdftractException::class, get_class($sdkException), "an in-band error record must NOT surface as a status-mapped subclass ({$fixture})");
+            $this->assertSame($wireRecords[$firstErrorIndex]['error'], $sdkException->getMessage(), "the record's error must surface byte-identical ({$fixture})");
+            $this->assertNull($sdkException->getStatusCode(), "an in-band stream error carries no HTTP status ({$fixture})");
+            $this->assertNull($sdkException->getErrorCode(), "an in-band stream error carries no error code ({$fixture})");
+            $this->assertSame(
+                self::normalizeJsonValue(array_slice($wireRecords, 0, $firstErrorIndex)),
+                $records,
+                "the client must yield exactly the records before the error record, decoded ({$fixture})"
+            );
+
+            return;
+        }
+
+        $this->assertNull($sdkException, "no record carried an error, so the client must not raise ({$fixture})");
+        $this->assertSame(
+            self::normalizeJsonValue($wireRecords),
             $records,
-            "SDK/CLI parity break ({$fixture} stream): the client must yield the CLI's records decoded"
+            "SDK/serve break ({$fixture} stream): the client must yield the wire's records decoded, in order"
         );
     }
 
@@ -653,5 +785,116 @@ final class ClientServeParityTest extends TestCase
         }
 
         return $decoded;
+    }
+
+    /**
+     * Deep-normalize a decoded JSON value for comparison: object keys are
+     * sorted recursively — JSON objects are unordered and the serializers
+     * need not agree on layout — while list order and scalar types stay
+     * strict, so the result pins content exactly.
+     */
+    private static function normalizeJsonValue(mixed $value): mixed
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        $normalized = array_map(static fn (mixed $item): mixed => self::normalizeJsonValue($item), $value);
+
+        if (!array_is_list($normalized)) {
+            ksort($normalized);
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * POST /extract/text's writer, over the buffered route's decoded
+     * document: every span's text followed by a newline, pages flattened in
+     * order (serve.rs extract_text_handler at the audited revision).
+     *
+     * @param array<string, mixed> $document
+     */
+    private static function serveTextFromDocument(array $document): string
+    {
+        $text = '';
+
+        foreach ($document['pages'] as $page) {
+            foreach ($page['spans'] as $span) {
+                $text .= $span['text'] . "\n";
+            }
+        }
+
+        return $text;
+    }
+
+    /**
+     * The CLI `--text` writer (pdftract-core/src/text.rs
+     * serialize_document_text): per page, the readable blocks' text joined
+     * with "\n\n" — header/footer/watermark blocks excluded, figures
+     * contributing no text — and pages joined with "\f" (N pages → N-1
+     * form feeds, none leading or trailing).
+     *
+     * @param array<string, mixed> $document
+     */
+    private static function cliTextFromDocument(array $document): string
+    {
+        $pageTexts = [];
+
+        foreach ($document['pages'] as $page) {
+            $blockTexts = [];
+
+            foreach ($page['blocks'] as $block) {
+                if (in_array($block['kind'], ['header', 'footer', 'watermark'], true)) {
+                    continue;
+                }
+
+                $blockTexts[] = $block['kind'] === 'figure' ? '' : $block['text'];
+            }
+
+            $pageTexts[] = implode("\n\n", $blockTexts);
+        }
+
+        return implode("\f", $pageTexts);
+    }
+
+    /**
+     * The CLI `--ndjson` writer (main.rs Format::Ndjson arm): one record
+     * per block — `{page, block_index, kind, bbox, spans}` — with the
+     * block's span indices resolved against the page's span array into
+     * `{text, font, size, bbox}` objects.
+     *
+     * @param array<string, mixed> $document
+     * @return list<array<string, mixed>>
+     */
+    private static function cliNdjsonRecordsFromDocument(array $document): array
+    {
+        $records = [];
+
+        foreach ($document['pages'] as $page) {
+            foreach ($page['blocks'] as $blockIndex => $block) {
+                $spans = [];
+
+                foreach ($block['spans'] ?? [] as $spanIndex) {
+                    $span = $page['spans'][$spanIndex];
+                    $spans[] = [
+                        'text' => $span['text'],
+                        'font' => $span['font'],
+                        'size' => $span['size'],
+                        'bbox' => $span['bbox'],
+                    ];
+                }
+
+                $records[] = [
+                    'page' => $page['index'],
+                    'block_index' => $blockIndex,
+                    'kind' => $block['kind'],
+                    'bbox' => $block['bbox'],
+                    'spans' => $spans,
+                ];
+            }
+        }
+
+        return $records;
     }
 }

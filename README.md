@@ -116,7 +116,11 @@ green with no build:
   A binary whose serve surface is broken (the stock conformance binaries'
   documented ConnectInfo defect — see
   `docs/notes/serve-parity-gap.md`, Addendum 2026-09-27c) skips the suite
-  with the diagnosis rather than failing it.
+  with the diagnosis rather than failing it. To produce a serve-capable
+  binary — built from current upstream and refused unless its `GET
+  /health` smoke gate passes — run `scripts/build-serve-bin.sh` and point
+  `PDFTRACT_SERVE_BIN` at the path it prints (see
+  `docs/notes/serve-parity-gap.md`, Addendum 2026-09-27e).
 
 ## License
 

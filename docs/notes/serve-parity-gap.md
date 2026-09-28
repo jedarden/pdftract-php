@@ -681,6 +681,114 @@ method's signature (no password parameter can be honoured by any route) and
 should be surfaced in the amendment rather than discovered during
 implementation.
 
+## Addendum 2026-09-27e — upstream resolves the ConnectInfo serve defect; the SERVE_BIN suites run live against a smoke-gated build (empirical)
+
+This closes the gap Addendum 2026-09-27c left open: the stock conformance
+binaries cannot serve, and the only serve-capable binary was the probe
+build — a hand-patched, untracked tree. Upstream has since fixed the
+defect at the source, and the workspace now carries a maintained build
+path that produces a serve-healthy binary with no source patch. Bead:
+`pdfphp-9f85adbe`.
+
+**The upstream fix.** After the conformance revision `eeab77e` and the two
+Swift-template commits the 2026-09-27 audit dismissed (`69b8ba851`, then
+`a2ed4c96` — the upstream checkout's local HEAD when this was written),
+upstream landed `2566480f0` ("fix(pdftract-b60ae586): serve serve/mcp
+routers via into_make_service_with_connect_info"), which changes both
+`axum::serve` call sites in `crates/pdftract-cli/src/serve.rs` from a bare
+`axum::serve(listener, app)` to
+`axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())`
+— exactly the two-call-site service-construction patch the probe build
+carried as a disclosed local deviation — and `62ff1e90e` pins the wiring
+with binary-level e2e tests. Both are reachable from upstream
+`origin/main` (`4481482e7…`), the revision verified here.
+
+**The maintained build path.** `scripts/build-serve-bin.sh` builds the
+binary both SERVE_BIN-gated groups run against (`--group serve-parity`,
+`--group real-server`). It extracts the chosen revision (`origin/main` by
+default, overridable via `PDFTRACT_REV`) from the upstream checkout with
+`git archive` into a scratch dir — never the working tree, so another
+agent's in-flight upstream edits cannot end up in the binary — runs
+`cargo build --release -p pdftract-cli`, and **refuses** to install the
+result unless the smoke gate passes: a loopback `serve --no-cache` start
+whose `GET /health` must answer 200 within the suites' 15 s budget — the
+same gate `ClientRealServerTest` applies. A repeat of the eeab77e defect
+(banner, then 500 on every request) fails loudly at build time instead of
+shipping a binary every suite skips around. Verified build (2026-09-27):
+upstream `4481482e71c24922489a88c6ff69cdc70a7f5c63`, binary sha256
+`2e8dfa699328c7a7c531bce07ce111cd3504165c003861d94518031747cee7d8`.
+
+**The scaffolding.** `.probe-parity/` — the `eeab77e`+patches probe build
+the 2026-09-26/27 addenda cite, including `transcript-errors/` — and
+`.serve-main/` — the prior hand-built extraction tree this script
+supersedes — stay in the workspace as untracked, gitignored scratch:
+regenerable build trees, not source. The maintained path is the script;
+either directory can be deleted and rebuilt at any time. (Operational
+note recorded the hard way: stale `serve --bind 127.0.0.1:<fixed-port>`
+processes from a manual probing session keep answering — with the
+*defective* binary's 500 — after their session dies, and a later
+fixed-port probe silently talks to them instead of failing to bind. The
+suites are immune — they claim ephemeral ports — but any manual
+fixed-port probe should verify whose process it is listening to.)
+
+**What the live binary does to the parity matrix roles.** At
+`4481482e7…` extraction succeeds for **all twelve** vendored fixtures —
+including the eight Class B stubs Addendum 2026-09-27 recorded failing
+with `No /Root reference in trailer` and the four Class A documents whose
+page iterator ended empty: upstream's parser work between `eeab77e` and
+`4481482e7` fixed the extraction defect as well. The Addendum 2026-09-27
+roles therefore flip: the success domain is what runs, and the failure
+domain becomes the forward pin — no current fixture exercises it, and the
+failure-domain assertions stand unchanged for the next binary that cannot
+extract some document.
+
+**The success-domain forward pins were falsified and re-authored.** The
+pins authored at `eeab77e` predicted byte-level serve↔CLI equality on
+success. Against a binary that can actually extract, the prediction fails
+on every route — no upstream route shares a success-domain byte format
+with its CLI equivalent. The pins now enforce content parity against the
+canonical document, with each route's measured divergence pinned as the
+divergence:
+
+- `POST /extract` ↔ `--json -`: the CLI pretty-prints, serve compacts —
+  the same document in two byte layouts. Pinned on the decoded value with
+  recursive key-order normalization (list order and scalar types stay
+  strict), so layout diverges freely while content stays exact.
+- `POST /extract/text` ↔ `--text -`: two genuinely different writers over
+  one extraction. Serve concatenates every span's text, newline-terminated
+  (`serve.rs` `extract_text_handler`); the CLI runs
+  `serialize_document_text` — readable blocks joined `"\n\n"`, pages
+  joined `"\f"`, header/footer/watermark blocks excluded, figures empty
+  (`pdftract-core/src/text.rs`). Each body is pinned against the buffered
+  route's canonical document.
+- `POST /extract/stream` ↔ `--ndjson`: the surfaces do not even share a
+  record schema. Serve emits one PAGE record per buffered page — the
+  buffered `pages[].{index,spans,blocks,tables}` verbatim, each optionally
+  carrying an in-band per-page `error` diagnostic string the buffered
+  pages never have — while the CLI emits one BLOCK record per block
+  (`{page, block_index, kind, bbox, spans[{text,font,size,bbox}]}`, the
+  `Format::Ndjson` arm in `main.rs`). Record counts legitimately differ (a
+  page with no blocks yields one serve record and no CLI record). Each
+  surface is pinned against the buffered route's canonical document, and
+  the SDK layer is pinned to `decodeRecord`'s real semantics: a record
+  carrying `error` aborts the stream on the base exception, message
+  byte-identical, with exactly the records before it already yielded.
+
+The canonical document the two non-JSON routes' writers pin against is a
+second raw `POST /extract` — a route's own body is only its own writer's
+bytes and cannot serve as the neutral reference.
+
+**Verification — the binary the SERVE_BIN-gated suites were verified
+against.** `PDFTRACT_SERVE_BIN` =
+`$PDFTRACT_REPO/target/serve-capable/pdftract-serve-capable`, built by
+`scripts/build-serve-bin.sh` from upstream
+`4481482e71c24922489a88c6ff69cdc70a7f5c63` (sha256
+`2e8dfa699328c7a7c531bce07ce111cd3504165c003861d94518031747cee7d8`),
+smoke gate green; direct probe on a fresh port: `GET /health` 200,
+`GET /` 200, `POST /extract` 200 with a full extraction payload. Suites:
+`--group serve-parity` **36 tests, 420 assertions, OK**; `--group
+real-server` **10 tests, 73 assertions, OK** (2026-09-27).
+
 ## Ancillary note — where the SDK method names do exist upstream
 
 The method taxonomy ADR-1 documents (`extract`, `extractText`,
