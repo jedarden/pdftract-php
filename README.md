@@ -111,8 +111,10 @@ green with no build:
 - `tests/ClientRealServerTest.php` (group `real-server`) — runs when
   `PDFTRACT_SERVE_BIN` points at a serve-capable binary, and drives the
   canonical HTTP client through a live `pdftract --serve` process: the
-  buffered and streaming POST routes, the real multipart parser's
-  rejections, real NDJSON chunk framing, and the idle bound on both sides.
+  buffered and streaming POST routes, the GET routes (the root route
+  banner and the `/extract` file-path guard's 404), the real multipart
+  parser's rejections, real NDJSON chunk framing, and the idle bound on
+  both sides.
   A binary whose serve surface is broken (the stock conformance binaries'
   documented ConnectInfo defect — see
   `docs/notes/serve-parity-gap.md`, Addendum 2026-09-27c) skips the suite

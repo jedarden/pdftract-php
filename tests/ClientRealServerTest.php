@@ -14,9 +14,11 @@ use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Real-server integration for the canonical HTTP client: the three POST
- * routes of a live `pdftract --serve` (axum) process, driven end to end
- * through {@see Client} with no fixture in between.
+ * Real-server integration for the canonical HTTP client: the routes of a
+ * live `pdftract --serve` (axum) process — the three POST routes driven
+ * end to end through {@see Client}, and the two GET routes pinned at the
+ * wire (the root banner and the /extract file-path guard have no client
+ * surface: the client is POST-only) — with no fixture in between.
  *
  * The suite closes the gap between the two loops the rest of the coverage
  * lives in, which never meet: the loopback fixture harness
@@ -188,6 +190,81 @@ final class ClientRealServerTest extends TestCase
         self::assertSame('ok', self::$healthBanner['status'] ?? null);
         self::assertIsString(self::$healthBanner['version'] ?? null);
         self::assertNotSame('', self::$healthBanner['version']);
+    }
+
+    // -------------------------------------------------------------- GET routes
+
+    public function test_the_root_route_answers_the_documented_route_banner(): void
+    {
+        // GET / is the server's self-description (serve.rs root_handler):
+        // a fixed 200 JSON banner advertising exactly the three POST
+        // routes and /health — the same list the parity matrix
+        // inventories. Pinned per field so a route that is dropped,
+        // renamed, or silently unadvertised fails here first; the only
+        // dynamic field, `version`, is cross-checked against the /health
+        // banner the startup gate captured (both read the binary's own
+        // package version).
+        $wire = $this->getWire('/');
+
+        self::assertSame(200, $wire['status'], 'the root banner is a fixed 200 — it has no failure mode');
+        self::assertSame('application/json', $wire['contentType'], $wire['body']);
+
+        $body = self::decodeJsonObject('/', $wire['body']);
+
+        self::assertSame('pdftract', $body['service'] ?? null, $wire['body']);
+        self::assertIsString($body['version'] ?? null, $wire['body']);
+        self::assertNotSame('', $body['version'], $wire['body']);
+        self::assertSame(
+            self::$healthBanner['version'] ?? null,
+            $body['version'],
+            'the banner and /health describe the same binary version',
+        );
+        self::assertSame(
+            [
+                'POST /extract - Extract PDF and return JSON',
+                'POST /extract/text - Extract PDF and return plain text',
+                'POST /extract/stream - Extract PDF and return streaming NDJSON',
+                'GET /health - Health check',
+            ],
+            $body['endpoints'] ?? null,
+            "the banner must advertise exactly the documented routes, in the server's own order",
+        );
+    }
+
+    public function test_the_get_extract_guard_rejects_file_path_queries_with_the_only_json_404(): void
+    {
+        // The guard's reason to exist: a file path must never ride a
+        // query string (?path=/etc/passwd and friends), so GET /extract
+        // is answered by extract_get_not_found_handler with the serve
+        // API's only JSON 404. The query string is not even read (the
+        // handler takes no query extractor), and a dropped registration
+        // would fall through to axum's bodyless 404 instead — so both
+        // halves are load-bearing: the verbatim JSON body under a
+        // file-path query, and its byte-identity with the bare-GET
+        // answer, pinning that the guard fires on the method and ignores
+        // the parameters wholesale.
+        $queried = $this->getWire('/extract?path=/etc/passwd');
+        $bare = $this->getWire('/extract');
+
+        self::assertSame(404, $queried['status'], 'the file-path guard must answer 404');
+        self::assertSame('application/json', $queried['contentType'], $queried['body']);
+
+        $body = self::decodeJsonObject('/extract', $queried['body']);
+
+        self::assertSame('NOT_FOUND', $body['error'] ?? null, $queried['body']);
+        self::assertSame(
+            'POST to /extract with multipart/form-data is required; file-path parameters are not supported',
+            $body['message'] ?? null,
+            $queried['body'],
+        );
+        self::assertSame(
+            "Use POST /extract with a 'file' field containing the PDF bytes",
+            $body['hint'] ?? null,
+            $queried['body'],
+        );
+
+        self::assertSame(404, $bare['status'], 'the guard fires without a query string too');
+        self::assertSame($queried['body'], $bare['body'], 'the query string must be ignored wholesale, not parsed');
     }
 
     // -------------------------------------------------------- buffered routes
@@ -722,6 +799,48 @@ final class ClientRealServerTest extends TestCase
         curl_close($handle);
 
         return $status !== 0 && is_string($body) ? ['status' => $status, 'body' => $body] : null;
+    }
+
+    /**
+     * GET a route on the live server, with no SDK in between
+     *
+     * The wire probe for the two GET routes — the root banner on `/`, the
+     * file-path guard on `GET /extract`. The client's surface is
+     * POST-only, so those routes have no client leg to assert: the
+     * server's own answer is the whole contract, returned in the same
+     * shape the POST probes return.
+     *
+     * @return array{status: int, body: string, contentType: ?string}
+     */
+    private function getWire(string $route): array
+    {
+        $handle = curl_init(self::$baseUrl . $route);
+        $contentType = null;
+
+        curl_setopt_array($handle, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT_MS => (int)(self::CLIENT_TIMEOUT_SECONDS * 1000),
+            CURLOPT_HEADERFUNCTION => static function ($handle, string $headerLine) use (&$contentType): int {
+                [$name, $value] = array_pad(explode(':', $headerLine, 2), 2, '');
+
+                if (strtolower(trim($name)) === 'content-type') {
+                    $contentType = trim($value);
+                }
+
+                return strlen($headerLine);
+            },
+        ]);
+
+        $body = curl_exec($handle);
+        $status = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+        $errno = curl_errno($handle);
+        $error = curl_error($handle);
+        curl_close($handle);
+
+        self::assertSame(0, $errno, "GET {$route} failed at the transport level: {$error}");
+        self::assertIsString($body);
+
+        return ['status' => $status, 'body' => $body, 'contentType' => $contentType];
     }
 
     // -------------------------------------------------------------- assertions
