@@ -2,12 +2,57 @@
 
 declare(strict_types=1);
 
-namespace Jedarden\Pdftract\Tests;
+namespace Jedarden\Pdftract\Tests\Retired;
 
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
+ * SUPERSEDED — retired with the CLI subprocess transport. Never run these
+ * cases against the canonical HTTP client.
+ *
+ * Retirement (bead pdfphp-62319135, 2026-09-29): both layers of this suite
+ * pin the retired CLI-subprocess wrapper's hash() (src/Pdftract/Client.php,
+ * loaded by file path), and that tree is pending deletion
+ * (pdfphp-ce2bbc56). Unlike the conformance sweep it could not be ported to
+ * the canonical HTTP client at all: `pdftract --serve` has no /hash route
+ * and no equivalent value in any serve response (docs/notes/
+ * serve-parity-gap.md, the hash row and its addenda), so the method surface
+ * decision itself is OPS-GATED on bf-4bd. The suite therefore joined the
+ * transport it drove in the tests/Retired/ partition, per the same pattern
+ * as the retired subprocess contract around it.
+ *
+ * What the record preserves, for whoever resurrects a hash() surface after
+ * bf-4bd:
+ *
+ * - the wrapper-contract layer (fake-binary cases, formerly the default
+ *   suite): argv construction, single-fingerprint-line validation, the
+ *   buffered deadline — the shape a CLI-side hash() wrapper must hold;
+ * - the real-binary layer (formerly group binary-conformance): INV-13,
+ *   determinism, the structural collision twins, byte equality with the raw
+ *   subcommand. These were verified green against the real binary on
+ *   2026-09-27; the evidence record is docs/notes/serve-parity-gap.md,
+ *   Addendum 2026-09-27b. The pins' runner lives alongside
+ *   (tests/Retired/hash-conformance-runner.php).
+ *
+ * The partition is inert, by construction (see tests/Retired/
+ * ClientSubprocessTest.php for the original statement of the pattern):
+ *
+ * - phpunit.xml excludes the `retired-cli-subprocess` group from the default
+ *   suite, so vendor/bin/phpunit never runs it — which also retires this
+ *   suite's former presence in the default run (the wrapper-contract cases
+ *   needed no binary and so ran everywhere; they would fatal on the file
+ *   loads the moment pdfphp-ce2bbc56 deletes the tree).
+ * - setUp() skips every case before any body executes.
+ * - The bodies still reference src/Pdftract/Client.php by path (the retired
+ *   wrapper — never the canonical HTTP client). Once pdfphp-ce2bbc56
+ *   deletes that tree the paths dangle, harmlessly: no body ever runs.
+ *
+ * To read this contract as live code, check out a revision from before the
+ * retirement (git log -- tests/ClientHashConformanceTest.php).
+ *
+ * --- original docblock (the suite as it ran) ---
+ *
  * Conformance pin for Client::hash() — the CLI-subprocess wrapper at
  * src/Pdftract/Client.php — against what the real `pdftract hash`
  * subcommand actually does (bead pdfphp-ee8d6dbd).
@@ -73,23 +118,30 @@ use PHPUnit\Framework\TestCase;
  * declares the same fully-qualified class names as the canonical HTTP
  * client, so it cannot be loaded inside the PHPUnit process.
  */
+#[Group('retired-cli-subprocess')]
 class ClientHashConformanceTest extends TestCase
 {
+    /** Why every case in this partition refuses to run. */
+    private const RETIRED =
+        'Retired with the CLI subprocess transport (ADR-1 in docs/plan/plan.md,'
+        . ' bead pdfphp-62319135): preserved as a record of the retired hash()'
+        . ' wrapper contract; not run against the HTTP client.';
+
     /** The CLI-subprocess client under test (NOT the canonical HTTP client). */
-    private const CLIENT_FILE = __DIR__ . '/../src/Pdftract/Client.php';
+    private const CLIENT_FILE = __DIR__ . '/../../src/Pdftract/Client.php';
 
     /** One-case-per-process executor for the client above. */
-    private const RUNNER_SCRIPT = __DIR__ . '/Support/hash-conformance-runner.php';
+    private const RUNNER_SCRIPT = __DIR__ . '/hash-conformance-runner.php';
 
     /** Fixture of the vendored suite's hash-same-file-same-hash case. */
-    private const HASH_FIXTURE = __DIR__ . '/sdk-conformance/fixtures/scientific_paper/11.pdf';
+    private const HASH_FIXTURE = __DIR__ . '/../sdk-conformance/fixtures/scientific_paper/11.pdf';
 
     /**
      * Fixture of the vendored suite's hash-content-stability case — and the
      * collision twin of HASH_FIXTURE: bytewise distinct (2534 vs 2553
      * bytes), yet the same structural fingerprint (pinned below).
      */
-    private const OTHER_FIXTURE = __DIR__ . '/sdk-conformance/fixtures/scientific_paper/12.pdf';
+    private const OTHER_FIXTURE = __DIR__ . '/../sdk-conformance/fixtures/scientific_paper/12.pdf';
 
     /** Wall-clock bound for one runner process (hash is a quick call; this is generous). */
     private const RUNNER_WALL_CLOCK_SECONDS = 60;
@@ -208,7 +260,6 @@ class ClientHashConformanceTest extends TestCase
      * family (future v2 without a wrapper release); this pin is where a
      * format drift gets noticed first.
      */
-    #[Group('binary-conformance')]
     public function testRealBinaryFingerprintMatchesInv13Exactly(): void
     {
         $binary = $this->requireRealBinary();
@@ -227,7 +278,6 @@ class ClientHashConformanceTest extends TestCase
      * The vendored suite's hash-same-file-same-hash case: hashing the same
      * file twice yields the same fingerprint.
      */
-    #[Group('binary-conformance')]
     public function testRealBinarySameFileHashesIdentically(): void
     {
         $binary = $this->requireRealBinary();
@@ -253,7 +303,6 @@ class ClientHashConformanceTest extends TestCase
      * inverted here, so a future "hash is a content digest" drift gets
      * noticed on both sides.
      */
-    #[Group('binary-conformance')]
     public function testRealBinaryStructuralFingerprintIsNotContentAddressing(): void
     {
         $binary = $this->requireRealBinary();
@@ -279,7 +328,6 @@ class ClientHashConformanceTest extends TestCase
      * The wrapper adds nothing: hash()'s value equals what the binary
      * prints when invoked by hand, byte for byte.
      */
-    #[Group('binary-conformance')]
     public function testRealBinaryClientResultEqualsRawBinaryOutput(): void
     {
         $binary = $this->requireRealBinary();
@@ -450,6 +498,15 @@ class ClientHashConformanceTest extends TestCase
         return isset($exception['message'])
             ? sprintf('%s: %s', $exception['class'] ?? 'unknown', (string) $exception['message'])
             : trim((string) json_encode($envelope));
+    }
+
+    protected function setUp(): void
+    {
+        // The partition's second inertness layer: even if the group is
+        // selected explicitly, no body below ever executes — they are a
+        // verbatim record of the suite as it ran against the retired
+        // CLI-subprocess wrapper.
+        $this->markTestSkipped(self::RETIRED);
     }
 
     protected function tearDown(): void

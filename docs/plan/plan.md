@@ -41,14 +41,18 @@ classes, and the `src/Pdftract/Codegen/*Exception.php` files — is still in
 the repo pending deletion (bead `pdfphp-ce2bbc56`, open; the remaining model
 classes' port to `src/Models/` is `pdfphp-6b9a3bdb`). Nothing autoloads it:
 the PSR-4 root is `src/`, so those files are unreachable shadows of live
-class names. The only live code that still *executes* the old subprocess
-client is the binary-gated conformance suites
-(`tests/ClientBinaryConformanceTest.php`,
-`tests/ClientHashConformanceTest.php`), which load it by file path to use
-the CLI transport as the comparison leg against a real `pdftract` binary.
-The retired subprocess *contract* itself survives only as a record under
-`tests/Retired/`, excluded from the default suite and inert by construction
-(partition per `bf-4gq`, commit `f0a1d6f`).
+class names. Nothing live *executes* it either any more: the two
+binary-gated conformance suites that loaded it by file path as the
+comparison leg (`tests/ClientBinaryConformanceTest.php`,
+`tests/ClientHashConformanceTest.php`) were retired into `tests/Retired/`
+with the transport they drove (bead `pdfphp-62319135`) — the conformance
+sweep's serve-routed cases are superseded on the canonical client by the
+`serve-parity`/`real-server` suites, and the hash pins are unportable until
+`bf-4bd` adds a `/hash` serve route — so both joined the record instead of
+stranding on the deletion. The retired subprocess *contract* — and now
+those two suites — survive only as a record under `tests/Retired/`,
+excluded from the default suite and inert by construction (partition per
+`bf-4gq`, commit `f0a1d6f`).
 
 There is no live deployed surface for this repo specifically (it is a
 library, not a service) and it is not listed on Packagist: install is via a

@@ -2,13 +2,59 @@
 
 declare(strict_types=1);
 
-namespace Jedarden\Pdftract\Tests;
+namespace Jedarden\Pdftract\Tests\Retired;
 
 use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
 /**
+ * SUPERSEDED — retired with the CLI subprocess transport. Never run these
+ * cases against the canonical HTTP client.
+ *
+ * Retirement (bead pdfphp-62319135, 2026-09-29): this harness's subject was
+ * the retired CLI-subprocess Client at src/Pdftract/Client.php, loaded by
+ * file path as the comparison leg, and that whole tree is pending deletion
+ * (pdfphp-ce2bbc56). Nothing else executes the wrapper, so the harness
+ * joined the transport it drove in the tests/Retired/ partition rather than
+ * stranding on the deletion. Per suite, the residual value lives elsewhere:
+ *
+ * - The conformance-case sweep (pass/parse_error classification) existed to
+ *   give bf-1s2's fix children a before/after signal on the wrapper's argv
+ *   construction. That bug class died with the wrapper, and the cases with
+ *   a live serve route (extract, extract_text, extract_stream) are covered
+ *   far more strongly on the canonical HTTP client by the binary-gated
+ *   suites that supersede this one: tests/ClientServeParityTest.php (group
+ *   serve-parity — serve↔CLI↔SDK parity per route across 12 fixtures) and
+ *   tests/ClientRealServerTest.php (group real-server). The other six
+ *   methods have no serve route at all (docs/notes/serve-parity-gap.md,
+ *   bf-4bd), so their cases are unrunnable on the live transport; the SDK
+ *   side of that gap is parked as `pending-no-serve-route` skips in
+ *   tests/ClientTest.php / tests/ClientTimeoutTest.php.
+ * - The hash semantic pins (INV-13, determinism, the structural collision
+ *   twins, single-key shape, byte equality, failure domain) were verified
+ *   green against the real binary on 2026-09-27; the evidence record is
+ *   docs/notes/serve-parity-gap.md, Addendum 2026-09-27b, and the
+ *   wrapper-contract half of hash() is retired alongside in
+ *   tests/Retired/ClientHashConformanceTest.php. A post-bf-4bd hash()
+ *   surface would resurrect these pins against its actual transport.
+ *
+ * The partition is inert, by construction (see tests/Retired/
+ * ClientSubprocessTest.php for the original statement of the pattern):
+ *
+ * - phpunit.xml excludes the `retired-cli-subprocess` group from the default
+ *   suite, so vendor/bin/phpunit never runs it.
+ * - setUp() skips every case before any body executes.
+ * - The bodies still reference src/Pdftract/Client.php by path (the retired
+ *   client this harness drove — never the canonical HTTP client). Once
+ *   pdfphp-ce2bbc56 deletes that tree the paths dangle, harmlessly: no body
+ *   ever runs.
+ *
+ * To read this harness as live code, check out a revision from before the
+ * retirement (git log -- tests/ClientBinaryConformanceTest.php).
+ *
+ * --- original docblock (the harness as it ran) ---
+ *
  * Runs the CLI-subprocess Client (src/Pdftract/Client.php) against a REAL,
  * locally built pdftract binary and classifies every conformance case's
  * outcome as real output vs CLI parse error.
@@ -89,11 +135,17 @@ use PHPUnit\Framework\TestCase;
  * across the group under each mutation). The pins bind the argument
  * construction, not just the happy path.
  */
-#[Group('binary-conformance')]
+#[Group('retired-cli-subprocess')]
 class ClientBinaryConformanceTest extends TestCase
 {
+    /** Why every case in this partition refuses to run. */
+    private const RETIRED =
+        'Retired with the CLI subprocess transport (ADR-1 in docs/plan/plan.md,'
+        . ' bead pdfphp-62319135): preserved as a record of the retired'
+        . ' conformance sweep; not run against the HTTP client.';
+
     /** Vendored conformance suite, relative to this file. */
-    private const SUITE_PATH = __DIR__ . '/sdk-conformance';
+    private const SUITE_PATH = __DIR__ . '/../sdk-conformance';
     private const CASES_PATH = self::SUITE_PATH . '/cases.json';
     private const FIXTURES_PATH = self::SUITE_PATH . '/fixtures/';
 
@@ -115,10 +167,10 @@ class ClientBinaryConformanceTest extends TestCase
     private const INV13_PATTERN = '/^pdftract-v1:[0-9a-f]{64}$/';
 
     /** The CLI-subprocess client under test (NOT the canonical HTTP client). */
-    private const CLIENT_FILE = __DIR__ . '/../src/Pdftract/Client.php';
+    private const CLIENT_FILE = __DIR__ . '/../../src/Pdftract/Client.php';
 
     /** One-case-per-process executor for the client above. */
-    private const RUNNER_SCRIPT = __DIR__ . '/Support/conformance-runner.php';
+    private const RUNNER_SCRIPT = __DIR__ . '/conformance-runner.php';
 
     /** Where the report lands when PDFTRACT_CONFORMANCE_REPORT is unset. */
     private const DEFAULT_REPORT_PATH = 'pdftract-php-conformance-report.json';
@@ -179,6 +231,15 @@ class ClientBinaryConformanceTest extends TestCase
                 ? ['path' => $path, 'version' => self::binaryVersion($path)]
                 : null;
         }
+    }
+
+    protected function setUp(): void
+    {
+        // The partition's second inertness layer: even if the group is
+        // selected explicitly, no body below ever executes — they are a
+        // verbatim record of the harness as it ran against the retired
+        // CLI-subprocess client.
+        $this->markTestSkipped(self::RETIRED);
     }
 
     // ------------------------------------------------------------- the tests

@@ -24,9 +24,10 @@ use PHPUnit\Framework\TestCase;
  * The suite closes the gap between the two loops the rest of the coverage
  * lives in, which never meet: the loopback fixture harness
  * (tests/LoopbackServerTest.php and the buffered/streaming suites it feeds)
- * scripts every response in-process, and the binary conformance harness
- * (tests/ClientBinaryConformanceTest.php, group binary-conformance)
- * exercises the retired CLI-subprocess transport. Against the fixture
+ * scripts every response in-process, and the retired binary conformance
+ * harness (tests/Retired/ClientBinaryConformanceTest.php, group
+ * retired-cli-subprocess) exercised the retired CLI-subprocess transport.
+ * Against the fixture
  * harness, multipart parsing quirks, real NDJSON chunk framing, actual
  * header/status behaviour, and the Addendum 2026-09-27 route findings are
  * pinned against a PHP fake; here they are pinned against the server

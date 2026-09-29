@@ -19,18 +19,20 @@
         explicit skips, so the coverage intent stays visible. It runs and every
         case reports a skip.
       - `retired-cli-subprocess` (tests/Retired/) is the superseded subprocess
-        contract, retired with the CLI transport per ADR-1 (docs/plan/plan.md)
-        and kept as a record. It must never run against the HTTP client, so the
-        group is excluded from the default suite; the partition also skips
-        itself in setUp() if it is ever selected explicitly.
+        contract plus the two binary-gated conformance suites that drove it
+        (ClientBinaryConformanceTest, ClientHashConformanceTest — retired with
+        the CLI transport per ADR-1 in docs/plan/plan.md, the suites per bead
+        pdfphp-62319135), kept as a record. It must never run against the HTTP
+        client, so the group is excluded from the default suite; the partition
+        also skips itself in setUp() if it is ever selected explicitly.
 
       Gotcha: test listing (the list-tests option) ignores group filters and
-      will enumerate the 35 retired cases anyway; only a run applies the
+      will enumerate the 89 retired cases anyway; only a run applies the
       exclusion.
 
       Inertness is layered, not enforced by failure: every retired case also
       skips itself in setUp(), so selecting the group explicitly still just
-      reports 35 skips — no case body ever executes. If both guards were
+      reports 89 skips — no case body ever executes. If both guards were
       removed, those bodies would run against the canonical HTTP client's
       classes (their deliberately unqualified names now resolve there),
       which is exactly the outcome this partition exists to prevent. Treat

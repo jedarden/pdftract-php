@@ -101,13 +101,10 @@ coverage, `tests/Retired/verify_psr3_logger.php`, drove the retired CLI
 subprocess transport and is kept only as a record — the suite never executes
 it.
 
-Three suites are gated on a real pdftract binary and skip cleanly (with a
-message, never a failure) when none is configured, so a plain run stays
-green with no build:
+Two suites are gated on a serve-capable pdftract binary and skip cleanly
+(with a message, never a failure) when none is configured, so a plain run
+stays green with no build:
 
-- `tests/ClientBinaryConformanceTest.php` (group `binary-conformance`) —
-  runs when `PDFTRACT_BIN` points at a pdftract binary, and exercises the
-  retired CLI-subprocess conformance cases against it.
 - `tests/ClientServeParityTest.php` (group `serve-parity`) — runs when
   `PDFTRACT_SERVE_BIN` points at one binary, and pins each covered serve
   route's output against its CLI equivalent with the SDK as the third
@@ -128,6 +125,24 @@ green with no build:
   /health` smoke gate passes — run `scripts/build-serve-bin.sh` and point
   `PDFTRACT_SERVE_BIN` at the path it prints (see
   `docs/notes/serve-parity-gap.md`, Addendum 2026-09-27e).
+
+Two further suites were retired with the CLI-subprocess transport they
+drove and live on only as inert records under `tests/Retired/` (group
+`retired-cli-subprocess`, excluded from the default suite, every case
+self-skipping in `setUp()` — they never run against the canonical HTTP
+client):
+
+- `tests/Retired/ClientBinaryConformanceTest.php` — swept the vendored
+  conformance cases against a real `pdftract` binary through the retired
+  subprocess Client (loaded by file path, now pending deletion). Its
+  serve-routed cases (extract, extract_text, extract_stream) are superseded
+  on the canonical client by the two suites above.
+- `tests/Retired/ClientHashConformanceTest.php` — pinned the retired
+  wrapper's `hash()` against the real binary's `pdftract hash` (INV-13,
+  determinism, the structural collision twins, byte equality). Unportable
+  to the HTTP client until a `/hash` serve route exists — the serve API has
+  none (`docs/notes/serve-parity-gap.md`, gated on bf-4bd) — so the pins are
+  kept for whoever resurrects a `hash()` surface after that.
 
 ## License
 
