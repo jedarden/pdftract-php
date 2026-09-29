@@ -4,28 +4,68 @@ This file is the single planning document for `pdftract-php`, the PHP SDK for
 the `pdftract` PDF processing tool. It was created retroactively on
 2026-07-20 during a fleet-wide artifact-improvement audit — no earlier plan
 existed, so this starts honestly from the current shipped state rather than
-fabricating history.
+fabricating history. The "What this repo ships" and "Known issues" sections
+below were reconciled against the landed ADR-1 migration on 2026-09-28 (bead
+`pdfphp-960c1fbe`); the ADR-1 transport-scope amendment itself is a separate,
+still-open edit (bead `pdfphp-b3788e75`), so the ADR-1 section reads as
+written in 2026-07.
 
 ## What this repo ships
 
-A Composer library (`jedarden/pdftract`, PSR-4 namespace `Jedarden\Pdftract\`)
-providing a PHP `Client` class with methods (`extract`, `extractText`,
-`extractMarkdown`, `extractStream`, `search`, `getMetadata`, `hash`,
-`classify`, `verifyReceipt`) plus a generated model/exception hierarchy
-(`src/Pdftract/Models/*`, `src/Pdftract/Codegen/*Exception.php`). As shipped
-today (`origin/main`), the `Client` works by shelling out to a local
-`pdftract` binary via `proc_open()` and parsing its stdout as JSON/NDJSON —
-it is a CLI-subprocess wrapper, not an HTTP client, despite `pdftract` itself
-supporting a `--serve` HTTP mode.
+A Composer library (`jedarden/pdftract`, PSR-4 namespace `Jedarden\Pdftract\`
+rooted at `src/`) whose canonical surface is the HTTP `Client`
+(`src/Client.php`, bead `pdfphp-e0998515`) for a `pdftract --serve` endpoint
+— the transport ADR-1 below committed the SDK to. The client exposes
+`extract()` (POST /extract, JSON), `extractText()` (POST /extract/text), and
+`extractStream()` (POST /extract/stream, streamed NDJSON), each POSTing the
+document as a multipart/form-data upload over curl, mapping non-2xx
+responses to the exception tree at the `src/` root (`PdftractException` plus
+ten status-mapped subclasses; commit `d0b9b59`, bead `pdfphp-92801363`), and
+carrying an API-key Bearer header, a PSR-3 logger, and a configurable
+timeout bound (total wall-clock for buffered calls, idle-bound for
+streaming; default `DEFAULT_TIMEOUT_SECONDS` = 300, overridable per call
+with a `'timeout'` option).
+
+It deliberately offers *not* the CLI transport's other six documented
+methods (`search`, `getMetadata`, `hash`, `classify`, `verifyReceipt`,
+`extractMarkdown`): the serve API exposes no HTTP route for them (the full
+route inventory is `docs/notes/serve-parity-gap.md`), so adding them is the
+human decision gated on `bf-4bd` (open, OPS-GATED), with the engineering
+follow-through on `pdfphp-decde78f` (in progress). The same evidence base is
+what resolved the `Codegen` stubs by deletion
+(`docs/notes/codegen-stubs-resolution.md`, bead `pdfphp-decde78f`).
+
+The retired CLI-subprocess wrapper is retired, not yet fully gone. Its
+`src/Pdftract/` tree — the `proc_open()` `Client`, the 25 generated model
+classes, and the `src/Pdftract/Codegen/*Exception.php` files — is still in
+the repo pending deletion (bead `pdfphp-ce2bbc56`, open; the remaining model
+classes' port to `src/Models/` is `pdfphp-6b9a3bdb`). Nothing autoloads it:
+the PSR-4 root is `src/`, so those files are unreachable shadows of live
+class names. The only live code that still *executes* the old subprocess
+client is the binary-gated conformance suites
+(`tests/ClientBinaryConformanceTest.php`,
+`tests/ClientHashConformanceTest.php`), which load it by file path to use
+the CLI transport as the comparison leg against a real `pdftract` binary.
+The retired subprocess *contract* itself survives only as a record under
+`tests/Retired/`, excluded from the default suite and inert by construction
+(partition per `bf-4gq`, commit `f0a1d6f`).
 
 There is no live deployed surface for this repo specifically (it is a
-library, not a service) and it is not currently listed on Packagist, so
-`composer require jedarden/pdftract` only works via a VCS repository entry,
-not the default Packagist registry.
+library, not a service) and it is not listed on Packagist: install is via a
+Forgejo VCS repository entry pinning the `0.1.0` tag, as the README
+documents (bead `bf-64f`). CI runs on Argo Workflows: `pdftract-php-ci` and
+`pdftract-php-publish` exist as `WorkflowTemplate`s in `declarative-config`
+(`k8s/iad-ci/argo-workflows/pdftract-php-ci.yaml`) and are synced to iad-ci
+(visible on the cluster as of 2026-09-28); the push trigger and the first
+proven-green end-to-end run are still being wired (`pdfphp-a43490a1`,
+`pdfphp-715ca6c3`, `pdfphp-12c3fc2e`).
 
 ## Known issues found during the 2026-07-20 audit
 
-- The repo's working tree (on the lab checkout) has ~7 weeks of uncommitted,
+(Status reconciled 2026-09-28 against the landed ADR-1 migration; resolved
+items are struck through with their resolution and bead.)
+
+- ~~The repo's working tree (on the lab checkout) has ~7 weeks of uncommitted,
   abandoned work-in-progress (`src/Client.php`, `src/Codegen/`,
   `src/Models/`, plus modified `composer.json`/`README.md`/`phpunit.xml`/
   `tests/ConformanceTest.php`) that half-migrates the SDK from the
@@ -34,7 +74,21 @@ not the default Packagist registry.
   `src/Pdftract/` tree in place and only reimplements 2 of 25 model classes
   and a stub `Codegen\Methods` ("This class will be populated..."). It is
   not safe to finish or discard unilaterally without a decision on the
-  target architecture — see ADR-1 below.
+  target architecture — see ADR-1 below.~~ Resolved — the decision was made
+  (ADR-1) and the WIP landed as the migration rather than being finished or
+  discarded piecemeal (umbrella bead `bf-4gq`, open until its tails close):
+  the canonical HTTP client is `src/Client.php` (`pdfphp-e0998515`), the
+  exception hierarchy is ported into the `src/` root (commit `d0b9b59`,
+  `pdfphp-92801363`), the `Codegen` stubs were resolved by deletion
+  (`docs/notes/codegen-stubs-resolution.md`, `pdfphp-decde78f`), and the
+  legacy subprocess suite was partitioned into `tests/Retired/` rather than
+  left half-alive (`pdfphp-3c3f44af`, commit `f0a1d6f`). Still open from
+  this bullet: deleting the superseded `src/Pdftract/` tree
+  (`pdfphp-ce2bbc56`) and porting the remaining 23 model classes to
+  `src/Models/` (`pdfphp-6b9a3bdb`); the method-surface question — whether
+  the six serve-unreachable CLI methods ever join the HTTP client — is
+  OPS-GATED on `bf-4bd` with `pdfphp-decde78f` holding the engineering
+  follow-through.
 - ~~The committed `tests/ConformanceTest.php` (on `origin/main`) loads fixtures
   from `__DIR__ . '/../../../../tests/sdk-conformance/'`, a path that only
   resolves if this repo is checked out as a subdirectory of a `pdftract`
@@ -50,23 +104,51 @@ not the default Packagist registry.
   is a fatal PSR-3 signature violation, and `getEntriesByLevel()` returned
   `array_filter()`'s key-preserving result that callers then indexed with
   `[0]`). See `tests/sdk-conformance/README.md` for provenance and
-  re-vendoring steps.
-- No CI is configured for this repo (no workflow files, and no
+  re-vendoring steps. (The verifier has since moved with the transport it
+  drove: it is now `tests/Retired/verify_psr3_logger.php`, a record the
+  suite never executes.)
+- ~~No CI is configured for this repo (no workflow files, and no
   `pdftract-php-build` entry among the fleet's Argo `WorkflowTemplate`s), so
-  the conformance suite above had never been exercised by automation.
-- `./vendor/bin/phpunit` exits non-zero on a plain `composer install` checkout
+  the conformance suite above had never been exercised by automation.~~
+  Resolved: `pdftract-php-ci` now exists as an Argo `WorkflowTemplate` in
+  `declarative-config` (`k8s/iad-ci/argo-workflows/pdftract-php-ci.yaml`,
+  drafted under `pdfphp-1b6a29fb`) and is synced to iad-ci. One pod builds
+  the three conformance/serve binaries with the SDK's own scripts, then
+  runs the plain suite with binaries unset (the documented baseline,
+  `scripts/definition-of-done.sh`) *and* the binary-gated groups with
+  `--log-junit` plus `scripts/ci-assert-gated-ran.php` — so a green build
+  means the gated cases actually executed, not merely skipped.
+  `pdftract-php-publish` gates tag publishes on the same suite. Still open:
+  proving the template green end to end (`pdfphp-715ca6c3`) and wiring the
+  push trigger (`pdfphp-a43490a1`).
+- ~~`./vendor/bin/phpunit` exits non-zero on a plain `composer install` checkout
   even when all 85 tests pass: `phpunit.xml` sets `failOnWarning="true"` and
   declares a `<coverage>` report, which raises a "No code coverage driver
   available" runner warning on any machine without Xdebug or PCOV. The one-line
   fix (drop the `<coverage>` block, or move it to a separate
   `phpunit-coverage.xml`) is deliberately not applied here because `phpunit.xml`
   is one of the files carrying the abandoned uncommitted work-in-progress
-  described above, and editing it would entangle the two changes.
-- `Client::extractText()`, `extractMarkdown()`, `extractStream()`,
+  described above, and editing it would entangle the two changes.~~
+  Resolved, in two steps: the `<coverage>` block was already dropped by the
+  WIP itself when that landed (`bf-4gq`), removing the warning, and the
+  suite was then partitioned so the retired subprocess cases report skips
+  instead of fataling against the wrong class — `./vendor/bin/phpunit` now
+  exits zero on a plain `composer install` checkout, which is what
+  `scripts/definition-of-done.sh` gates on (`pdfphp-3c3f44af`, commit
+  `f0a1d6f`). The entanglement that deferred the one-line fix is gone with
+  the WIP it referred to.
+- ~~`Client::extractText()`, `extractMarkdown()`, `extractStream()`,
   `search()`, and `verifyReceipt()` each hand-roll their own ~30-line
   `proc_open`/pipe-handling block instead of reusing the private `exec()`
   helper that `extract()`, `getMetadata()`, `hash()`, and `classify()`
-  already share — six near-identical copies of the same subprocess logic.
+  already share — six near-identical copies of the same subprocess logic.~~
+  Resolved by the ADR-1 landing rather than by deduplication: the six
+  copies lived in the subprocess client, which is retired. The canonical
+  HTTP `Client` (`src/Client.php`) builds every request through one shared
+  request/transfer/error path — the deduplication ADR-1 promised, achieved
+  by construction — and the subprocess code survives only as the retired
+  record (`tests/Retired/`) and the pending-deletion `src/Pdftract/` tree
+  (`pdfphp-ce2bbc56`).
 - ~~No timeout is set on any `proc_open()` call — a hung or slow `pdftract`
   invocation (e.g. a pathological PDF) blocks the calling PHP process
   indefinitely.~~ Fixed 2026-07-30 (bead `bf-jyj`): every subprocess is now
@@ -76,7 +158,19 @@ not the default Packagist registry.
   Buffered calls get a total wall-clock bound; `extractStream()`/`search()`
   get an idle bound. When ADR-1's HTTP transport lands, the equivalent
   (`CURLOPT_TIMEOUT` / `CURLOPT_CONNECTTIMEOUT`) must carry the same defaults
-  and the same `timeout` per-call option.
+  and the same `timeout` per-call option. That carry-over has since
+  happened: the HTTP client bounds buffered calls with
+  `CURLOPT_TIMEOUT_MS` + `CURLOPT_CONNECTTIMEOUT_MS` and streaming calls
+  with an idle bound that resets on server output, with the same
+  constructor-configurable default (`DEFAULT_TIMEOUT_SECONDS` = 300.0) and
+  the same per-call `'timeout'` option (`src/Client.php` class docblock).
+  The subprocess client's second default
+  (`DEFAULT_QUICK_TIMEOUT_SECONDS` = 15.0 for metadata/hash-class calls)
+  had no HTTP method left to apply to — all three HTTP methods are
+  extract-class — so the single 300.0 default covers the whole HTTP
+  surface. Note the retired subprocess code this bullet was written against
+  lives on only as the `tests/Retired/` record and the pending-deletion
+  `src/Pdftract/` tree.
 - `origin` pointed directly at `github.com/jedarden/pdftract-php` with no
   Forgejo repo behind it, in violation of this workspace's
   Forgejo-primary/GitHub-mirror hosting policy. Fixed as part of this audit:
