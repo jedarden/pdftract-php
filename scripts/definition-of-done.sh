@@ -6,10 +6,11 @@
 #
 # --fast selects nothing today (the suite has no slow partition) and is
 # consumed here rather than forwarded: PHPUnit rejects unknown options, so
-# passing it through would fail the very quick gate it asks for. Tests that
-# need a real pdftract binary (tests/ClientBinaryConformanceTest.php, group
-# binary-conformance) skip with a message unless PDFTRACT_BIN is set — a
-# plain green run needs no binary installed.
+# passing it through would fail the very quick gate it asks for. The suites
+# gated on a serve-capable pdftract binary (groups serve-parity and
+# real-server, env PDFTRACT_SERVE_BIN) skip with a message when it is unset,
+# and the retired CLI-subprocess suites under tests/Retired/ are excluded
+# from the default suite entirely — a plain green run needs no binary.
 #
 # On machines where php is not on PATH (the lab's nix store), the script
 # falls back to the known php-with-extensions profile: plain `php` there
