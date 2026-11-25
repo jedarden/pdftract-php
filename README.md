@@ -370,15 +370,43 @@ not a drop-in `hash()`.
 
 ## Development
 
+### Environment prerequisite: php (and composer) reachable
+
+Everything below assumes PHP 8.2+ with ext-curl reachable as `php`, plus
+a composer for the first `vendor/` install. Every composer vendor binary
+starts with `#!/usr/bin/env php`, so on a machine where `php` is not on
+PATH, `./vendor/bin/phpunit` dies before PHPUnit starts — it prints
+`env: 'php': No such file or directory` to stderr and exits **127**, with
+no test output. On the lab box (nix store) that is the *default* state:
+php exists only under `/nix/store`, in a `php-with-extensions` profile —
+plain php builds lack the curl extension the client's tests need — and
+composer's nix profile has been garbage-collected away entirely. Export
+the profile before any manual run:
+
+```bash
+# the store hash changes on every nix update (and the profile can be GC'd),
+# so glob for it rather than hardcoding one — same lookup the gate does
+export PATH="$(ls -d /nix/store/*-php-with-extensions-*/bin | head -1):$PATH"
+```
+
+With php reachable, `./vendor/bin/phpunit` runs as written below. Where
+composer is missing too (the lab's case), prefer the gate script: it
+resolves php with the glob above, bootstraps a checksum-pinned composer
+2.11.3 phar when neither PATH nor the nix store can supply one, installs
+`vendor/` if missing, and runs the suite — so it works from a clean clone
+with nothing on PATH and no prerequisite export at all. The manual
+equivalent, when you want each step visible:
+
 ```bash
 # Install dependencies
 composer install
 
-# Run tests
+# Run tests — or `php vendor/bin/phpunit` to make the interpreter explicit
 ./vendor/bin/phpunit
 
 # Definition of done: the same suite, via the gate script (resolves
-# php/composer on machines where neither is on PATH)
+# php/composer on machines where neither is on PATH — see its header for
+# the fallback chain)
 scripts/definition-of-done.sh --fast
 
 # Run the real-server suite against a serve-capable pdftract binary
