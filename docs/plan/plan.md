@@ -6,9 +6,10 @@ the `pdftract` PDF processing tool. It was created retroactively on
 existed, so this starts honestly from the current shipped state rather than
 fabricating history. The "What this repo ships" and "Known issues" sections
 below were reconciled against the landed ADR-1 migration on 2026-09-28 (bead
-`pdfphp-960c1fbe`); the ADR-1 transport-scope amendment itself is a separate,
-still-open edit (bead `pdfphp-b3788e75`), so the ADR-1 section reads as
-written in 2026-07.
+`pdfphp-960c1fbe`) and re-checked against the beads and CI state they cite on
+2026-11-25 (bead `pdfphp-1f2e271e`); the ADR-1 transport-scope amendment
+itself is a separate, still-open edit (bead `pdfphp-b3788e75`), so the ADR-1
+section reads as written in 2026-07.
 
 ## What this repo ships
 
@@ -17,7 +18,9 @@ rooted at `src/`) whose canonical surface is the HTTP `Client`
 (`src/Client.php`, bead `pdfphp-e0998515`) for a `pdftract --serve` endpoint
 — the transport ADR-1 below committed the SDK to. The client exposes
 `extract()` (POST /extract, JSON), `extractText()` (POST /extract/text), and
-`extractStream()` (POST /extract/stream, streamed NDJSON), each POSTing the
+`extractStream()` (POST /extract/stream, streamed NDJSON — its NDJSON
+contract and idle bound are pinned by `tests/ClientStreamingRouteTest.php`,
+commit `5322dc1`), each POSTing the
 document as a multipart/form-data upload over curl, mapping non-2xx
 responses to the exception tree at the `src/` root (`PdftractException` plus
 ten status-mapped subclasses; commit `d0b9b59`, bead `pdfphp-92801363`), and
@@ -57,12 +60,24 @@ excluded from the default suite and inert by construction (partition per
 There is no live deployed surface for this repo specifically (it is a
 library, not a service) and it is not listed on Packagist: install is via a
 Forgejo VCS repository entry pinning the `0.1.0` tag, as the README
-documents (bead `bf-64f`). CI runs on Argo Workflows: `pdftract-php-ci` and
-`pdftract-php-publish` exist as `WorkflowTemplate`s in `declarative-config`
-(`k8s/iad-ci/argo-workflows/pdftract-php-ci.yaml`) and are synced to iad-ci
-(visible on the cluster as of 2026-09-28); the push trigger and the first
-proven-green end-to-end run are still being wired (`pdfphp-a43490a1`,
-`pdfphp-715ca6c3`, `pdfphp-12c3fc2e`).
+documents (bead `bf-64f`). CI runs on Argo Workflows: `pdftract-php-ci`
+exists as a `WorkflowTemplate` in `declarative-config`
+(`k8s/iad-ci/argo-workflows/pdftract-php-ci.yaml`), is synced to iad-ci,
+and runs green on every Forgejo push (first proven-green run
+`pdfphp-715ca6c3`, push trigger `pdfphp-a43490a1`, sync verified
+`pdfphp-12c3fc2e`). The companion `pdftract-php-publish` template was
+**retired 2026-09-29** (`pdfphp-35d94ac4`): it is preserved unmodified as
+`k8s/iad-ci/argo-workflows/pdftract-php-publish.yaml.disabled` in
+`declarative-config`, outside the ApplicationSet's sync glob so ArgoCD
+pruned the live copy. Its premise — publishing this SDK to Packagist —
+contradicted the Forgejo-tag install documented above, and its six defects
+(unbindable 5Gi/sata-large PVC, unprovisioned `github-pat-pdftract`
+secret, conformance URL aimed at nonexistent GitHub gnu tarballs,
+tag-and-push to the GitHub read-only mirror, a cascade slot naming a
+template that never existed, an unregistered Packagist package) are
+recorded, with the resurrection order, in that file's header. Until a
+channel decision says otherwise, releasing this SDK means pushing a Forgejo
+tag.
 
 ## Known issues found during the 2026-07-20 audit
 
@@ -121,10 +136,14 @@ items are struck through with their resolution and bead.)
   runs the plain suite with binaries unset (the documented baseline,
   `scripts/definition-of-done.sh`) *and* the binary-gated groups with
   `--log-junit` plus `scripts/ci-assert-gated-ran.php` — so a green build
-  means the gated cases actually executed, not merely skipped.
-  `pdftract-php-publish` gates tag publishes on the same suite. Still open:
-  proving the template green end to end (`pdfphp-715ca6c3`) and wiring the
-  push trigger (`pdfphp-a43490a1`).
+  means the gated cases actually executed, not merely skipped. The follow-ups
+  still open at the 2026-09-28 reconciliation have since closed: the template
+  was proven green end to end (`pdfphp-715ca6c3`), the Forgejo push trigger
+  was wired (`pdfphp-a43490a1`), and the iad-ci sync was verified
+  (`pdfphp-12c3fc2e`) — `pdftract-php-ci` now runs on every push. The
+  companion `pdftract-php-publish` template was retired on 2026-09-29
+  (`pdfphp-35d94ac4`) and no longer gates anything; see the CI paragraph in
+  "What this repo ships" above.
 - ~~`./vendor/bin/phpunit` exits non-zero on a plain `composer install` checkout
   even when all 85 tests pass: `phpunit.xml` sets `failOnWarning="true"` and
   declares a `<coverage>` report, which raises a "No code coverage driver
