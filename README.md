@@ -538,9 +538,15 @@ suite" section of `docs/notes/adr1-serve-parity-memo.md`.
 scripts/definition-of-done.sh --fast
 ```
 
-The repo's gate: the PHPUnit suite, green. The script resolves `php`
+The repo's gate: the PHPUnit suite, green, behind a license gate that
+asserts the MIT claim before the suite runs — LICENSE present at the
+repo root, opening with the standard title, the standard grant text
+verbatim, and `composer.json`'s `license` field agreeing (`composer
+validate` never checks for the file, and the claim backs the Packagist
+publication path). The script resolves `php`
 (falling back to the nix-store `php-with-extensions` profile where plain
-`php` lacks the curl extension), resolves `composer` (nix-store profile,
+`php` lacks the curl extension), runs the license gate, resolves
+`composer` (nix-store profile,
 then a checksum-pinned composer 2.11.3 phar bootstrapped into a temp dir
 when the profile has been garbage-collected and `vendor/` is absent),
 runs `composer install` only when `vendor/` is missing, and execs

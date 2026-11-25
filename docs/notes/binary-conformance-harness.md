@@ -131,7 +131,7 @@ the retirement.
 ## Running the definition-of-done gate locally
 
 ```bash
-scripts/definition-of-done.sh          # the PHPUnit suite, green
+scripts/definition-of-done.sh          # the license gate + the PHPUnit suite, green
 scripts/definition-of-done.sh --fast   # the quick gate CI asks for
 ```
 
@@ -141,15 +141,22 @@ What the script does, in order:
    lacks the curl extension the client's tests need, so the script falls
    back to the first `php-with-extensions` profile under `/nix/store` when
    `php` is not on PATH (or fails with that diagnosis).
-2. **Resolves `composer`.** PATH first, then the nix-store composer
+2. **Runs the license gate.** Asserts the MIT claim before the suite:
+   LICENSE present at the repo root, opening with the standard title,
+   carrying a real `Copyright (c) <year> <holder>` line, the standard
+   grant text verbatim past the copyright, and `composer.json`'s
+   `license` field agreeing. `composer validate` does not check for the
+   file, and a missing or divergent LICENSE is a silent blocker for the
+   Packagist publication path (bf-64f).
+3. **Resolves `composer`.** PATH first, then the nix-store composer
    profile; when both are missing (the profile has been garbage-collected
    on this box before) **and** `vendor/autoload.php` is absent, it
    bootstraps a checksum-pinned composer 2.11.3 phar into a temp dir and
    runs it through the php resolved above. CI's builder image carries
    composer and never reaches this path.
-3. **Installs dependencies** (`composer install --no-interaction
+4. **Installs dependencies** (`composer install --no-interaction
    --no-progress`) only when `vendor/` is missing.
-4. **Execs `php vendor/bin/phpunit`** with any extra arguments forwarded.
+5. **Execs `php vendor/bin/phpunit`** with any extra arguments forwarded.
 
 `--fast` is consumed rather than forwarded — PHPUnit rejects unknown
 options, so passing it through would fail the very quick gate it asks
