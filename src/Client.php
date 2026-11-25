@@ -81,11 +81,19 @@ class Client
      *
      * @param string $baseUrl Base URL of the pdftract serve endpoint,
      *                        e.g. 'http://pdftract.internal:8080'
-     * @param string|null $apiKey Optional API key. The serve API itself has no
-     *                            built-in authentication; deployments that put
-     *                            an authenticating reverse proxy in front of
-     *                            it receive this as an Authorization: Bearer
-     *                            header.
+     * @param string|null $apiKey Optional API key, sent as an Authorization:
+     *                            Bearer header on every request. --serve
+     *                            itself neither validates nor rejects the
+     *                            header — it reads no credential of any kind
+     *                            (upstream eeab77e..f34fc6ca; see
+     *                            docs/notes/serve-parity-gap.md, Addendum
+     *                            2026-11-25c) — so on a directly reachable
+     *                            serve port a wrong, wrong-scheme, or absent
+     *                            key is indistinguishable from a correct one
+     *                            and the key protects nothing. It is a
+     *                            contract for deployments that front --serve
+     *                            with an authenticating reverse proxy
+     *                            configured to enforce it.
      * @param LoggerInterface|null $logger Optional PSR-3 logger (default: null)
      * @param float $timeoutSeconds Default request timeout in seconds. 0
      *                              disables the bound (default: 300.0)

@@ -627,7 +627,8 @@ silently coerced (rows above). `401`/`403`/`429`/`503` are produced by
 nothing in serve.rs — the API has no auth or rate limiting by design
 (`serve.rs:6-17`) — so those statuses reach an SDK caller only from an
 authenticating/quota-ing reverse proxy, with whatever body the proxy
-sends.
+sends. (The Authorization-header audit that evidence now rests on:
+Addendum 2026-11-25c.)
 
 ### Reconciliation against `Client::exceptionClassForStatus()`
 
@@ -1021,6 +1022,112 @@ The "Consequence for option-forwarding callers" of Addendum 2026-09-26 and
 the `Client::extract()` forwarding docblock's inertness note therefore hold
 on the full success domain: the field remains a documented no-op over
 HTTP, on every route, whether extraction succeeds or fails.
+
+## Addendum 2026-11-25c — the Authorization header is silently ignored by `--serve` (static + empirical)
+
+This records the Authorization-handling verdict the route inventory left
+implicit. The Client emits `Authorization: Bearer <key>` on every request
+when a key is configured (pinned by the buffered/streaming route suites),
+but no serve-contract reconciliation bead covered the header, and nothing
+in this file said what `--serve` itself does with it. Question: is a
+configured API key validated, rejected, or ignored? Bead:
+`pdfphp-41e18555`.
+
+**Verdict: silently ignored.** `pdftract --serve` neither validates nor
+rejects the header — it reads no credential of any kind. A wrong, a
+wrong-scheme, and an absent credential are indistinguishable to the
+server, and no configuration can make them distinguishable, because the
+`serve` subcommand has no flag to give it a key. The header is a pure
+proxy contract: consumed by nothing on the pdftract side, it protects
+nothing against direct access to the serve port.
+
+**Static evidence — `eeab77e`, the revision the route inventory is pinned
+to.**
+
+1. `serve.rs:6-17`, the module's own security model: "**NO
+   AUTHENTICATION**: pdftract serve has NO built-in authentication. This
+   is a deliberate design decision — authentication and authorization are
+   the responsibility of the deployment infrastructure (reverse proxy,
+   API gateway, service mesh)", with "Authentication (OAuth2, API keys,
+   mTLS, etc.)" listed among the duties the deploying reverse proxy
+   should take over.
+2. The production header surface is one read, of one header, for one
+   purpose: the body-limit middleware reads `content-length`
+   (`serve.rs:422`, stack `serve.rs:415-462`). No handler takes a header
+   extractor; `HeaderMap` is imported only inside the `#[cfg(test)] mod
+   tests` that starts at `serve.rs:1096-1097` (`serve.rs:1251`); no
+   `TypedHeader` anywhere; the strings `authorization`/`bearer` occur in
+   serve.rs only inside the module doc itself.
+3. `audit_middleware` reads headers only for client-IP attribution —
+   `x-forwarded-for`, and only when the operator passes
+   `--trust-forwarded-for` (`middleware/audit.rs:78-79, 113`) — never for
+   authorization.
+4. The startup banner says it out loud: `*** NO BUILT-IN AUTH *** —
+   Deploy behind a reverse proxy for production.` (`serve.rs:471`).
+5. The `serve` subcommand's flags (`cli.rs:282-305`: bind, cache dir,
+   cache size, no-cache, max-upload-mb, max-decompress-gb, audit-log)
+   include no key/token option — the server cannot even be *given* a
+   credential to validate against. The only bearer-token machinery in
+   cli.rs belongs to the `Mcp` subcommand (`cli.rs:338-344`,
+   `--auth-token`/`--auth-token-file`), a different server process
+   behind the non-default `mcp` feature, not the HTTP serve API.
+6. Consistent with Addendum 2026-09-27d's inventory: no code path in
+   serve.rs produces 401 or 403, so there is no status a rejected
+   credential could arrive as even in principle.
+
+**The verdict is revision-independent across the audited lineage.**
+`serve.rs` is byte-identical from `4481482e7` through current
+`origin/main` (`f34fc6ca`, `cmp`-verified 2026-11-25), and **no commit**
+in `4481482e7..origin/main` touches `serve.rs`, `cli.rs`, or
+`crates/pdftract-cli/src/middleware/`. The newer tree's router
+(`serve.rs:591-598`), its single production header read
+(`serve.rs:606`, `content-length`), its banner (`serve.rs:538`), and its
+`serve` subcommand flags (`cli.rs:294-321`) are all unchanged from the
+`eeab77e` reading above; the only bearer-token machinery still lives on
+the `Mcp` subcommand (`cli.rs:366-372`).
+
+**Empirical confirmation — 2026-11-25, the live serve API.** The static
+reading alone was not treated as the evidentiary bar (the standard
+Addendum 2026-09-26 set), so the same claim was probed against a running
+server: the serve-capable binary built by `scripts/build-serve-bin.sh`
+from upstream `origin/main` (sha256 `c2841aa50ac7249521582c44e0e50c07e24c439892f184327fa82fa858af3ea5`
+— differing from the hashes recorded in Addenda 2026-11-25/2026-11-25b
+because Rust release builds are not byte-reproducible across toolchain
+states; the identity that matters is the byte-identical `serve.rs`
+argued above, so this binary provably serves the audited router).
+Ephemeral loopback port, `--no-cache`, health-gated, listener ownership
+confirmed via `ss`; runner and transcript retained under
+`~/scratch/pdfphp-41e18555-authz-probe/` (gitignored). Seven requests:
+
+- `GET /health` under four `Authorization` variants — absent,
+  `Bearer example-invalid-credential`, `Bearer
+  example-arbitrary-credential-value`, `Basic dXNlcjpwYXNz` (wrong
+  scheme) — **all HTTP 200, all 33 bytes, sha256-identical**.
+- `POST /extract` (vendored `code/code.pdf` fixture) under three
+  variants — absent, wrong Bearer, arbitrary Bearer — **all HTTP 200,
+  all 690 bytes, sha256-identical**.
+- The server's stderr log carries no trace of any variant: no WARN, no
+  auth-shaped line — the header leaves no more mark than a field the
+  server never declared.
+
+The SDK already holds the executable form of this claim:
+`tests/ClientRealServerTest.php::test_a_configured_api_key_travels_inert_past_the_real_server`
+(pdfphp-d446d44f) asserts the keyed client receives byte-identical
+success *and* failure verdicts to the keyless one against the real
+server. This addendum supplies the upstream-side evidence that pin
+rests on.
+
+**Consequence for the Client contract.** This is a documentation
+reconciliation, not a matrix row — no parity-row status changes, and no
+`src/` change is warranted (the header must keep being sent; the proxy
+contract is the API key's whole purpose). What changed: the
+constructor's `$apiKey` docblock and the README's API-key paragraph now
+state the verdict — the key is transmitted but ignored by `--serve`
+itself, and offers zero protection on a directly reachable serve port —
+so a reader cannot mistake the option for server-side enforcement.
+`AuthenticationException`'s proxy-only reading (Addendum 2026-09-27d,
+"retained deliberately as proxy contracts") is unchanged and now
+cross-referenced.
 
 ## Ancillary note — where the SDK method names do exist upstream
 

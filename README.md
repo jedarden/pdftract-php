@@ -100,8 +100,15 @@ $client = new Client(
 );
 ```
 
-The serve API has no built-in authentication; the API key exists for
-deployments that put an authenticating reverse proxy in front of it. An
+The serve API has no built-in authentication: `pdftract --serve` never
+reads the `Authorization` header at all, so against a directly reachable
+serve port a wrong, wrong-scheme, or absent key is indistinguishable from
+a correct one and the key protects nothing. The API key exists for
+deployments that put an authenticating reverse proxy in front of
+`--serve` and configure that proxy to enforce it; the header makes no
+difference to the pdftract server itself (upstream audit and live probe:
+[docs/notes/serve-parity-gap.md](docs/notes/serve-parity-gap.md),
+Addendum 2026-11-25c). An
 empty base URL, a negative or non-finite timeout, or a non-numeric
 `'timeout'` option throws `ConfigurationException` before anything is sent.
 
