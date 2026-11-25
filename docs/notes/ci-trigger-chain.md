@@ -95,3 +95,34 @@ credential for `argocd-manager` on iad-ci exists in `~/.kube/` — the
 rs-manager kubeconfig CLAUDE.md documents is no longer on disk either).
 Push-triggered delivery — the template's designed trigger — is the path
 that works, and as of the repair it is wired end to end.
+
+## The gate that blocked the first deliveries (2026-11-25)
+
+Webhook 39's first two deliveries — the repair's own test fire and the
+first real push (f180fc6) — never reached the sensor. The eventsource log
+rejected both with `invalid auth header` on `/pdftract-php` while the
+`miroir` and `declarative-config` routes dispatched normally.
+
+The cause was the route's `authSecret`, not the webhook's secret value.
+argo-events `authSecret` is Bearer-only: v1.9.11
+`pkg/eventsources/common/webhook/webhook.go:146` requires every delivery
+to carry `Authorization: Bearer <secret-value>` and rejects everything
+else with 401 "invalid auth header" — there is no HMAC check. A Forgejo
+webhook can only send that header through the `authorization_header`
+config field, and this Forgejo silently drops it: PATCHing hook 39 with
+the field returns 200 but the key does not persist (round-trip probe,
+2026-11-25). jedarden/SEAM hook 13 — the repo whose route comment
+documents the Bearer mechanism — carries no authorization_header either,
+so no gated route can ever accept a delivery from this Forgejo.
+
+Fix: declarative-config commit 3c63afbc3 removes `authSecret` from the
+`/pdftract-php` route, matching the sibling routes that already run
+ungated. Exposure is the same as theirs: a forged POST can trigger a CI
+run; nothing secret is exposed to it (the run clones the pushed ref and
+prints logs).
+
+The shared webhook secret itself stays in OpenBao
+(`rs-manager/iad-ci/forgejo/webhook-secret`, provisioned by
+`forgejo-webhook-externalsecret.yml`); this box cannot read OpenBao
+headlessly (openbao-rs-manager.ardenone.com fronts authentik SSO), which
+also rules out rotating the value into the webhook config.
