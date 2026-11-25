@@ -49,6 +49,30 @@ follow-through on `pdfphp-decde78f` (in progress). The same evidence base is
 what resolved the `Codegen` stubs by deletion
 (`docs/notes/codegen-stubs-resolution.md`, bead `pdfphp-decde78f`).
 
+The `hash` row of that nine-method surface is adjudicated (2026-11-25, bead
+`pdfphp-2f7439c3`; verdict recorded on `bf-4bd`): upstream `pdftract`
+exposes a hash capability over the CLI only, and no HTTP method can
+approximate it. The CLI's `pdftract hash` subcommand prints a
+page-tree-structural fingerprint, empirically pinned against real binaries
+(`docs/notes/serve-parity-gap.md` Addendum 2026-09-27b), while serve exposes
+neither a `/hash` route nor any equivalent value — the only fingerprint a
+serve response carries, `POST /extract`'s `fingerprint` field, is computed
+over catalog-only input and diverges from the CLI hash for any document
+with pages (`docs/notes/serve-parity-gap.md` Addendum 2026-09-23). An HTTP
+`hash()` would therefore either silently return a different fingerprint
+than the CLI method it replaced, or wait on upstream exposing the
+subcommand-grade value; the retired subprocess transport that could reach
+the real subcommand is no longer a live surface (nothing autoloads or
+executes `src/Pdftract/`, which survives only pending deletion,
+`pdfphp-ce2bbc56`), so the old fallback option requires a deliberate
+re-landing. `hash` is consequently *removed* from the committed method
+surface, not deferred: it stays a documented GAP (parity matrix row 7)
+pending `bf-4bd`'s operator ruling, and the byte-identity pins any future
+port must satisfy survive in `tests/Retired/` — INV-13 shape, determinism,
+the 11.pdf/12.pdf structural collision, byte equality with the raw
+subcommand, and the missing-input failure domain (commits `8fff818`,
+`9da9a80`).
+
 The retired CLI-subprocess wrapper is retired, not yet fully gone. Its
 `src/Pdftract/` tree — the `proc_open()` `Client`, the 25 generated model
 classes, and the `src/Pdftract/Codegen/*Exception.php` files — is still in
@@ -62,7 +86,9 @@ comparison leg (`tests/ClientBinaryConformanceTest.php`,
 with the transport they drove (bead `pdfphp-62319135`) — the conformance
 sweep's serve-routed cases are superseded on the canonical client by the
 `serve-parity`/`real-server` suites, and the hash pins are unportable until
-`bf-4bd` adds a `/hash` serve route — so both joined the record instead of
+`bf-4bd` resolves the hash surface (an upstream `/hash` serve route, or a
+deliberate CLI-transport re-landing — see the adjudication above) — so both
+joined the record instead of
 stranding on the deletion. The retired subprocess *contract* — and now
 those two suites — survive only as a record under `tests/Retired/`,
 excluded from the default suite and inert by construction (partition per

@@ -152,6 +152,15 @@ extraction (`pdftract hash`, `cli.rs:215-227`, dispatch `main.rs:748`). On
 serve the fingerprint only appears embedded in the `POST /extract` response
 (`serve.rs:580`); there is no `/hash` route (`serve.rs:406-414`).
 
+Adjudicated for the SDK surface 2026-11-25 (bead `pdfphp-2f7439c3`, verdict
+recorded on `bf-4bd`): `hash` is removed from the committed method surface.
+The CLI capability became unreachable when the subprocess transport was
+retired, and no serve value can stand in (Addendum 2026-09-23: the embedded
+fingerprint is a different, catalog-only value) — so the method stays GAP
+pending `bf-4bd`'s operator ruling, with the byte-identity pins for any
+future port retained in `tests/Retired/` (Addendum 2026-09-27b). The
+plan.md surface commitment carries the same verdict.
+
 ### `classify` — GAP
 
 What the CLI offers: document-type classification from metadata + signals
