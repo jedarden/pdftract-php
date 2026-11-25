@@ -126,3 +126,30 @@ The shared webhook secret itself stays in OpenBao
 `forgejo-webhook-externalsecret.yml`); this box cannot read OpenBao
 headlessly (openbao-rs-manager.ardenone.com fronts authentik SSO), which
 also rules out rotating the value into the webhook config.
+
+## The sensor injected nothing until 2026-11-25 (parameter placement)
+
+Once deliveries flowed, the trigger fired on every push — and injected
+nothing. The first four push-triggered runs (2026-11-25 03:10–03:27 UTC;
+three survive in the sensor log by name — `pdftract-php-ci-wmp2s`,
+`-kndxf`, `-7lpg2`) each submitted with
+`ref: refs/heads/main` and `commit-sha: ""` regardless of what the push
+carried: every run's args were the template's static defaults, not the
+payload's `body.ref`/`body.after`. Functional damage: the sha (traceability
+only — the build clones the ref) was never recorded on the run, and a push
+to any non-main branch would have run CI against main.
+
+Root cause, discovered in the fleet's own documentation
+(`declarative-config/k8s/iad-ci/argo-events/ccdash-push-trigger.yaml`
+header): a sensor trigger's `parameters:` (src/dest) block must nest under
+`template.argoWorkflow:` (sibling of `operation:`/`source:`). Placed at
+trigger level (sibling of `template:`) — where this sensor had it since
+July — the argo-events version on iad-ci silently discards it. Every other
+parameterized sensor in the directory uses the argoWorkflow placement;
+this was the only outlier.
+
+Fix: declarative-config commit `3f60c3f39` (bead `pdfphp-a43490a1`)
+moves the block under `argoWorkflow:`, mappings unchanged
+(`body.ref` → parameter 0, `body.after` → parameter 1). The proof of the
+repair is a push whose triggered workflow carries the pushed sha in its
+`commit-sha` argument — recorded on the owning bead's closing note.
