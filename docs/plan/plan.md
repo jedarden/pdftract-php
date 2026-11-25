@@ -9,7 +9,10 @@ below were reconciled against the landed ADR-1 migration on 2026-09-28 (bead
 `pdfphp-960c1fbe`) and re-checked against the beads and CI state they cite on
 2026-11-25 (bead `pdfphp-1f2e271e`); the ADR-1 transport-scope amendment
 itself is a separate, still-open edit (bead `pdfphp-b3788e75`), so the ADR-1
-section reads as written in 2026-07.
+section otherwise reads as written in 2026-07 — Decision bullet 5 excepted,
+amended 2026-09-27 (bead `pdfphp-65f3444d`) and 2026-11-25 (bead
+`pdfphp-087173a2`) to name the verification the model/exception tree
+actually rests on.
 
 ## What this repo ships
 
@@ -28,7 +31,10 @@ decoded and verbatim; bead `pdfphp-7feda6fc`, pinned by
 `tests/ClientServeInfoRouteTest.php` and a client leg in the real-server
 suite) — mapping non-2xx
 responses to the exception tree at the `src/` root (`PdftractException` plus
-ten status-mapped subclasses; commit `d0b9b59`, bead `pdfphp-92801363`), and
+ten subclasses: four status-mapped, three raised client-side, three
+reserved and never raised; commit `d0b9b59`, bead `pdfphp-92801363`;
+audited against the real serve statuses in
+`docs/notes/models-serve-shape-audit.md`, zero divergences), and
 carrying an API-key Bearer header, a PSR-3 logger, and a configurable
 timeout bound (total wall-clock for buffered calls, idle-bound for
 streaming; default `DEFAULT_TIMEOUT_SECONDS` = 300, overridable per call
@@ -252,8 +258,7 @@ Concretely:
 - Streaming endpoints (`extractStream`, `search`) use chunked HTTP reads
   instead of reading subprocess stdout line-by-line.
 - The model/exception tree (`src/Models/` plus the exception hierarchy at
-  the `src/` root) is kept — it's a reasonable representation of the API's
-  data shapes — but verified against what `pdftract --serve` actually
+  the `src/` root) is verified against what `pdftract --serve` actually
   exposes, not the CLI's JSON output shape, since the two are not
   guaranteed identical. The original wording — regenerate/audit "against
   the actual HTTP OpenAPI schema `pdftract --serve` exposes" — is void: at
@@ -262,11 +267,23 @@ Concretely:
   (`docs/notes/serve-parity-gap.md` § "OpenAPI finding"), and following it
   would mean fabricating a schema rather than generating against one
   (`docs/notes/codegen-stubs-resolution.md`, which resolved the `Codegen`
-  stubs by deletion on that basis). Verification rests on what does exist:
-  the serve-route parity gap matrix in `docs/notes/serve-parity-gap.md`
-  with its 2026-09-26 `markdown_anchors` and 2026-09-27 route-parity
-  empirical addenda, plus the request-shape pins in
+  stubs by deletion on that basis). The verification was discharged
+  2026-11-25 (bead `pdfphp-087173a2`) against the real bodies rather than a
+  schema — `docs/notes/models-serve-shape-audit.md`, the audit this bullet
+  names as its target, built on live captures of all five routes' response
+  bodies and error statuses plus the request-shape pins in
   `tests/ClientBufferedRouteTest.php` and `tests/ClientStreamingRouteTest.php`.
+  Its two halves came out differently: the exception tree passes — every
+  serve status maps to the class the client raises (Audit 2 there, zero
+  divergences, re-established at upstream `origin/main` on top of the
+  eeab77e reconciliation) — while the shipped `src/Models/` half fails as
+  written: both classes are 2026-05 WIP stubs whose every field diverges
+  from the captured serve bodies, and nothing references them, so the
+  "kept as a reasonable representation" premise is dropped; the model tree
+  this ADR keeps is the one the model port (`pdfphp-6b9a3bdb`) owes,
+  targeting the captured serve shapes, with the stubs dying with the
+  dead-tree deletion (`pdfphp-ce2bbc56`) unless the port rewrites them to
+  the audited shapes.
 - The conformance-suite path bug is fixed as part of this work (fixtures
   vendored into this repo, or fetched from the `pdftract` repo's release
   artifacts — not read via `../../../../` relative to a monorepo layout that
