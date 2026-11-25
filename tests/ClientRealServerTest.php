@@ -16,10 +16,11 @@ use PHPUnit\Framework\TestCase;
 /**
  * Real-server integration for the canonical HTTP client: the routes of a
  * live `pdftract --serve` (axum) process — the three POST routes driven
- * end to end through {@see Client}, and the three GET routes pinned at
- * the wire (the root banner, the /extract file-path guard, and /health
- * have no client surface: the client is POST-only) — with no fixture in
- * between.
+ * end to end through {@see Client}, the two GET info routes read through
+ * {@see Client::health()} and {@see Client::serverInfo()} (bead
+ * pdfphp-7feda6fc), and the GET /extract file-path guard pinned at the
+ * wire alone (a guard is the server's behaviour, not a client method) —
+ * with no fixture in between.
  *
  * The suite closes the gap between the two loops the rest of the coverage
  * lives in, which never meet: the loopback fixture harness
@@ -301,6 +302,45 @@ final class ClientRealServerTest extends TestCase
 
         self::assertSame(404, $bare['status'], 'the guard fires without a query string too');
         self::assertSame($queried['body'], $bare['body'], 'the query string must be ignored wholesale, not parsed');
+    }
+
+    public function test_the_client_info_methods_read_the_live_banners_the_wire_pins(): void
+    {
+        // The client legs for the two GET info routes (bead
+        // pdfphp-7feda6fc), pointed at the same live answers the raw pins
+        // above hold: health() and serverInfo() must decode exactly what
+        // getWire() proved the server sends — the documented two-field
+        // health body and the four-route banner, carrying the version the
+        // startup gate captured from this binary. serverInfo() is asserted
+        // per field rather than as a whole-body assertSame: the wire's key
+        // order comes back alphabetized (serde_json's BTreeMap), so order
+        // is not part of this pin — content is.
+        $client = new Client(self::$baseUrl, timeoutSeconds: self::CLIENT_TIMEOUT_SECONDS);
+
+        self::assertSame(
+            ['status' => 'ok', 'version' => self::$healthBanner['version'] ?? null],
+            $client->health(),
+            'health() must map the live health body field for field',
+        );
+
+        $info = $client->serverInfo();
+
+        self::assertSame('pdftract', $info['service'] ?? null, (string)json_encode($info));
+        self::assertSame(
+            self::$healthBanner['version'] ?? null,
+            $info['version'] ?? null,
+            'the banner must describe the same binary version /health does',
+        );
+        self::assertSame(
+            [
+                'POST /extract - Extract PDF and return JSON',
+                'POST /extract/text - Extract PDF and return plain text',
+                'POST /extract/stream - Extract PDF and return streaming NDJSON',
+                'GET /health - Health check',
+            ],
+            $info['endpoints'] ?? null,
+            "the banner's advertised routes must arrive as the server's own list, in order",
+        );
     }
 
     // -------------------------------------------------------- buffered routes

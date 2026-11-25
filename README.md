@@ -81,12 +81,15 @@ use Jedarden\Pdftract\Client;
 $client = new Client('http://127.0.0.1:8080');
 ```
 
-Every method POSTs the document as a `multipart/form-data` upload — the
-server never reads files from its own filesystem on a client's behalf — so
-each call takes the document as a `Source` (a file path or in-memory bytes)
-or as a raw PDF byte string. Every request is bounded by a timeout:
-buffered calls get a total wall-clock bound, streaming calls an *idle*
-bound that resets each time the server produces output
+Every extraction method POSTs the document as a `multipart/form-data`
+upload — the server never reads files from its own filesystem on a
+client's behalf — so each call takes the document as a `Source` (a file
+path or in-memory bytes) or as a raw PDF byte string. The two serve-info
+methods ([`health()`](#health-connectivity-check) and
+[`serverInfo()`](#serverinfo-the-servers-self-description)) are
+bodyless GETs that carry no document. Every request is bounded by a
+timeout: buffered calls get a total wall-clock bound, streaming calls an
+*idle* bound that resets each time the server produces output
 (see [Timeouts](#timeouts)).
 
 The constructor takes the base URL plus three optional arguments — an API
@@ -201,6 +204,47 @@ yielding it as a record. Abandoning the generator early (`break`, an
 uncaught exception, the generator being garbage-collected) closes the
 connection immediately.
 
+### health(): connectivity check
+
+`health(array $options = []): array` sends a bodyless `GET /health` — the
+route the server's own startup smoke gates poll — and returns its decoded
+JSON body:
+
+```php
+$health = $client->health(['timeout' => 5]);
+// ['status' => 'ok', 'version' => '0.5.1']
+```
+
+This is the cheap round trip that proves the endpoint answers before any
+document is uploaded to it. The route has no failure mode upstream (a
+fixed 200), so a non-2xx answer is a reverse proxy interposing itself,
+and it maps through the shared status→exception machinery like any other
+route's failure. Only the `'timeout'` option applies — the route reads no
+query string and no form fields, and any other option throws
+`ConfigurationException` rather than being silently dropped.
+
+### serverInfo(): the server's self-description
+
+`serverInfo(array $options = [])` sends a bodyless `GET /` and returns
+the server's info banner decoded — service name, version, and the routes
+it advertises:
+
+```php
+$info = $client->serverInfo();
+// [
+//   'service' => 'pdftract',
+//   'version' => '0.5.1',
+//   'endpoints' => ['POST /extract - Extract PDF and return JSON', …],
+// ]
+```
+
+The banner is returned verbatim, unparsed: upstream publishes no machine
+schema for it, so the free-text `endpoints` strings are not contracted
+into capability objects. Callers that want a capability list read
+`endpoints` themselves; callers that want liveness want
+[`health()`](#health-connectivity-check). The same `'timeout'`-only
+option rule applies.
+
 ### Timeouts
 
 The fourth constructor argument sets the default bound, 300 seconds. The
@@ -215,8 +259,8 @@ $doc = $client->extract(Source::file('/tmp/big.pdf'), ['timeout' => 0]); // unbo
 
 The two call families bind differently:
 
-- **Buffered** (`extract`, `extractText`): the bound is total wall-clock
-  time for the whole request.
+- **Buffered** (`extract`, `extractText`, `health`, `serverInfo`): the
+  bound is total wall-clock time for the whole request.
 - **Streaming** (`extractStream`): the bound is *idle* time — it resets
   every time the server produces output, so a long but healthy stream is
   not cut off while a silent stall still is.
@@ -370,8 +414,9 @@ stays green with no build:
   `PDFTRACT_SERVE_BIN` points at a serve-capable binary, and drives the
   canonical HTTP client through a live `pdftract --serve` process: the
   buffered and streaming POST routes, the GET routes (the root route
-  banner, the `/extract` file-path guard's 404, and the `/health`
-  banner), the real multipart parser's rejections, real NDJSON chunk
+  banner and the `/health` banner through `health()`/`serverInfo()`, and
+  the `/extract` file-path guard's 404 at the wire), the real multipart
+  parser's rejections, real NDJSON chunk
   framing, and the idle bound on both sides — every route of the audited
   serve inventory (`docs/notes/serve-parity-gap.md`).
   A binary whose serve surface is broken (the stock conformance binaries'

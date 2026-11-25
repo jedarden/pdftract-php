@@ -1129,6 +1129,72 @@ so a reader cannot mistake the option for server-side enforcement.
 "retained deliberately as proxy contracts") is unchanged and now
 cross-referenced.
 
+## Addendum 2026-11-25d — the two GET info routes gain Client methods (decision + implementation)
+
+The route inventory above lists six routes; every SDK method, test bead,
+and the OPS-GATED `bf-4bd` decision concern only the three POST routes
+and the six missing-method rows. `GET /health` (handler `serve.rs:509-514`)
+and the `GET /` server-info banner (handler `serve.rs:495-506`) had no
+Client method, no test of their own, and no tracking bead — outside
+`bf-4bd`'s scope, nothing would ever adjudicate them. Bead:
+`pdfphp-7feda6fc`.
+
+**Decision: cover both.** `GET /health` is the connectivity check this
+repository's own tooling already performs out-of-band with raw curl —
+`scripts/build-serve-bin.sh`'s smoke gate and `ClientRealServerTest`'s
+startup gate both poll it before trusting a server — so the SDK could not
+express, in its own surface, the check its own harnesses depend on. The
+banner (`GET /`) answers "is this endpoint pdftract, and which version?"
+without uploading a document. Both handlers are fixed-200 with no failure
+mode (Addendum 2026-09-27d, observed), and their handler source is
+**byte-identical from the audited revision `eeab77e` through current
+upstream `origin/main`** (`f34fc6ca` — the revision Addendum 2026-11-25c
+already cites; both handler bodies `cmp`-verified range-for-range against
+`git show` extracts on 2026-11-25; the rest of serve.rs differs by a
+router relocation that leaves these two bodies untouched),
+so the surface being pinned is stable.
+
+**What was implemented.** `Client::health()` and `Client::serverInfo()`
+(`src/Client.php`): bodyless GETs on a shared private request path (the
+GET variant of `request()` — same `headers()`, `applyTimeout()`,
+`transportError()`, `serverError()`, and `undecodableResponse()` machinery
+the buffered POSTs use), returning the decoded JSON body verbatim. No
+capability-parsing layer over the banner's free-text `endpoints` strings:
+upstream publishes no machine schema for it (§ "OpenAPI finding"), so a
+parser would contract the client to prose it does not control. Only the
+client-side `'timeout'` option applies; any other option raises
+`ConfigurationException` rather than being silently dropped (the routes
+read no query string and no form fields — there is nothing to forward).
+The configured API key travels on the GETs as on every request
+(Addendum 2026-11-25c: inert upstream, a proxy contract).
+
+**The pins.** `tests/ClientServeInfoRouteTest.php` (groups
+`http-client` + `serve-info-routes`) holds the fixture-harness contract in
+the buffered-route style: request shape (GET method, exact path, empty
+query, no fields, no upload, zero body bytes, no Content-Type, JSON
+Accept, Bearer present/absent), response mapping (whole-body `assertSame`
+against the documented handlers' bodies, verbatim down to the four
+`endpoints` strings and their order), the undecodable-2xx path, the
+proxy-interposition statuses (401/404/503 mapped by status alone — the
+routes' only non-2xx source), the per-call timeout bound against a stall,
+`timeout: 0` unbounded, and the non-timeout-option rejections with no
+request sent. `tests/ClientRealServerTest.php` gained the client leg:
+`health()`/`serverInfo()` driven against the live axum answers the suite's
+raw wire pins hold, reading the same version the startup gate captured
+(green 2026-11-25 against the serve-capable binary of Addendum
+2026-11-25c's provenance — upstream `origin/main`, sha256 `c2841aa5…`:
+real-server group 14 tests / 103 assertions OK; serve-parity group re-run
+unchanged, 36 tests / 420 assertions OK).
+
+**Consequence for the matrix.** The inventory's six routes now split: the
+three POST routes have extraction methods, `GET /` and `GET /health` have
+info methods, and `GET /extract` remains deliberately client-less — it is
+the file-path guard answering the serve API's only JSON 404, the server's
+behaviour rather than an SDK capability, and it stays pinned on the real
+wire in the real-server suite. No parity-matrix row changes status: the
+matrix inventories the nine CLI-taxonomy methods, and neither GET route
+corresponds to one.
+
 ## Ancillary note — where the SDK method names do exist upstream
 
 The method taxonomy ADR-1 documents (`extract`, `extractText`,

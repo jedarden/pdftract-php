@@ -21,7 +21,12 @@ rooted at `src/`) whose canonical surface is the HTTP `Client`
 `extractStream()` (POST /extract/stream, streamed NDJSON — its NDJSON
 contract and idle bound are pinned by `tests/ClientStreamingRouteTest.php`,
 commit `5322dc1`), each POSTing the
-document as a multipart/form-data upload over curl, mapping non-2xx
+document as a multipart/form-data upload over curl, plus the two
+serve-info getters on bodyless GETs — `health()` (GET /health, the
+connectivity check) and `serverInfo()` (GET /, the banner returned
+decoded and verbatim; bead `pdfphp-7feda6fc`, pinned by
+`tests/ClientServeInfoRouteTest.php` and a client leg in the real-server
+suite) — mapping non-2xx
 responses to the exception tree at the `src/` root (`PdftractException` plus
 ten status-mapped subclasses; commit `d0b9b59`, bead `pdfphp-92801363`), and
 carrying an API-key Bearer header, a PSR-3 logger, and a configurable

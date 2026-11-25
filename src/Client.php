@@ -18,6 +18,8 @@ use Psr\Log\NullLogger;
  * - {@see Client::extract()}      → POST /extract        (JSON)
  * - {@see Client::extractText()}  → POST /extract/text   (plain text)
  * - {@see Client::extractStream()}→ POST /extract/stream (NDJSON, streamed)
+ * - {@see Client::health()}       → GET  /health         (health check banner)
+ * - {@see Client::serverInfo()}   → GET  /               (server info banner)
  *
  * A non-2xx response raises the exception subclass its status maps to —
  * authentication (401/403), not found (404), rate limiting (429), request
@@ -204,6 +206,69 @@ class Client
     {
         $timeout = $this->takeTimeout($options);
         yield from $this->stream('/extract/stream', $pdf, $options, $timeout);
+    }
+
+    /**
+     * Check serve-endpoint health
+     *
+     * GET /health (serve.rs `health_handler`) answers a fixed 200 JSON body
+     * of exactly `{"status": "ok", "version": <binary package version>}` —
+     * the route the server's own startup smoke gates poll, and this
+     * client's connectivity check: a cheap round trip that proves the
+     * endpoint answers before any document is uploaded to it.
+     *
+     * The route has no upstream failure mode (docs/notes/serve-parity-gap.md,
+     * Addendum 2026-09-27d: observed 200, no other status the handler can
+     * produce), so a non-2xx answer is a proxy interposing itself — it maps
+     * through the shared status→exception machinery like any other route's
+     * failure (a proxy's 401 an AuthenticationException, a 503 the base
+     * class, and so on).
+     *
+     * @param array $options Client-side options; only 'timeout' (seconds, 0
+     *                       unbounded) applies — the route reads no query
+     *                       string and no form fields, so any other key is
+     *                       rejected rather than silently dropped
+     * @return array Decoded JSON body, e.g. ['status' => 'ok', 'version' => '0.5.1']
+     * @throws ConfigurationException If an option other than 'timeout' is
+     *                                given, or the timeout is invalid
+     * @throws PdftractException On a non-2xx response or an undecodable 2xx body
+     * @throws TimeoutException If the request exceeds its timeout
+     * @throws ConnectionException If the server cannot be reached
+     */
+    public function health(array $options = []): array
+    {
+        return $this->getJson('/health', $options);
+    }
+
+    /**
+     * Get the server's self-description banner
+     *
+     * GET / (serve.rs `root_handler`) answers a fixed 200 JSON banner:
+     * `service` ("pdftract"), `version`, and `endpoints` — the list of
+     * routes the server advertises, as free-text descriptions. Reading it
+     * answers "is this endpoint pdftract, and which version?" without
+     * uploading a document.
+     *
+     * The banner is returned as decoded, verbatim: upstream publishes no
+     * machine schema for it (docs/notes/serve-parity-gap.md, § "OpenAPI
+     * finding"), so a capability-parsing layer on top of the free-text
+     * `endpoints` strings would contract the client to prose it does not
+     * control. A caller that wants to advertise capabilities reads the
+     * `endpoints` list itself; a caller that wants liveness wants
+     * {@see self::health()}.
+     *
+     * @param array $options Client-side options (see {@see self::health()})
+     * @return array Decoded JSON body, e.g.
+     *               ['service' => 'pdftract', 'version' => '0.5.1', 'endpoints' => [...]]
+     * @throws ConfigurationException If an option other than 'timeout' is
+     *                                given, or the timeout is invalid
+     * @throws PdftractException On a non-2xx response or an undecodable 2xx body
+     * @throws TimeoutException If the request exceeds its timeout
+     * @throws ConnectionException If the server cannot be reached
+     */
+    public function serverInfo(array $options = []): array
+    {
+        return $this->getJson('/', $options);
     }
 
     /**
@@ -404,6 +469,107 @@ class Client
 
         $this->logger->debug('Executing pdftract request', [
             'method' => 'POST',
+            'url' => $url,
+            'timeout' => $timeout,
+        ]);
+
+        $body = curl_exec($handle);
+
+        if ($body === false) {
+            throw $this->transportError($handle, $url, $timeout);
+        }
+
+        $status = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
+        curl_close($handle);
+
+        $response = ['status' => $status, 'body' => (string)$body, 'url' => $url];
+
+        if ($status < 200 || $status >= 300) {
+            throw $this->serverError($response);
+        }
+
+        return $response;
+    }
+
+    /**
+     * Run a buffered GET request for one of the serve info routes and
+     * decode its JSON body
+     *
+     * The GET variant of {@see self::request()}: the same timeout, error,
+     * logging, and decoding machinery, but no document and no multipart
+     * body — the two GET routes the serve API exposes (the /health check
+     * and the / server info banner) answer a fixed JSON body from the path
+     * alone. There is nothing to forward, so an option that survives
+     * {@see self::takeTimeout()} is a caller error rather than a droppable
+     * extra: forwarding it would mean inventing a query-string encoding
+     * the handlers do not read, and dropping it would let the call
+     * silently mean something other than what the caller wrote.
+     *
+     * @param string $path Route path to append to the base URL
+     * @param array $options Client-side options ('timeout' already allowed
+     *                       for); anything else is rejected
+     * @return array Decoded JSON body
+     * @throws ConfigurationException If a non-timeout option is given
+     * @throws PdftractException On non-2xx responses or an undecodable body
+     * @throws TimeoutException If the request exceeds its timeout
+     * @throws ConnectionException If the server cannot be reached
+     */
+    private function getJson(string $path, array $options): array
+    {
+        $timeout = $this->takeTimeout($options);
+
+        if ($options !== []) {
+            throw new ConfigurationException(sprintf(
+                "option '%s' does not apply to GET %s: the route reads no query string and no form fields — only 'timeout' is a client-side option here",
+                (string)array_key_first($options),
+                $path,
+            ));
+        }
+
+        $response = $this->get($path, $timeout);
+
+        $result = json_decode($response['body'], true);
+
+        if (!is_array($result)) {
+            return $this->undecodableResponse($response);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Run a buffered GET request and return the response
+     *
+     * Bounded by a total wall-clock timeout, exactly like the multipart
+     * POSTs. Any non-2xx status, transport failure, or timeout is raised
+     * as the matching exception.
+     *
+     * @param string $path Route path to append to the base URL
+     * @param float $timeout Total wall-clock bound in seconds (0 for unbounded)
+     * @return array{status: int, body: string, url: string} Response parts
+     * @throws PdftractException On non-2xx responses
+     * @throws TimeoutException If the request exceeds its timeout
+     * @throws ConnectionException If the server cannot be reached
+     */
+    private function get(string $path, float $timeout): array
+    {
+        $url = $this->baseUrl . $path;
+
+        $handle = curl_init($url);
+
+        if ($handle === false) {
+            throw new ConnectionException("Failed to initialise request to {$url}", 'curl_init failed');
+        }
+
+        curl_setopt_array($handle, [
+            CURLOPT_HTTPGET => true,
+            CURLOPT_HTTPHEADER => $this->headers('application/json'),
+            CURLOPT_RETURNTRANSFER => true,
+        ]);
+        $this->applyTimeout($handle, $timeout);
+
+        $this->logger->debug('Executing pdftract request', [
+            'method' => 'GET',
             'url' => $url,
             'timeout' => $timeout,
         ]);
