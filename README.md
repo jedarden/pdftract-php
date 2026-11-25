@@ -326,6 +326,10 @@ composer install
 # Run tests
 ./vendor/bin/phpunit
 
+# Definition of done: the same suite, via the gate script (resolves
+# php/composer on machines where neither is on PATH)
+scripts/definition-of-done.sh --fast
+
 # Run the real-server suite against a serve-capable pdftract binary
 PDFTRACT_SERVE_BIN=/path/to/pdftract ./vendor/bin/phpunit --group real-server
 ```
@@ -389,6 +393,82 @@ client):
   to the HTTP client until a `/hash` serve route exists — the serve API has
   none (`docs/notes/serve-parity-gap.md`, gated on bf-4bd) — so the pins are
   kept for whoever resurrects a `hash()` surface after that.
+
+### Conformance binaries and the PDFTRACT_BIN gate
+
+The binary conformance suites — today the retired records above, and any
+harness that re-lands them — run `Client` methods against real `pdftract`
+builds in two variants, both built from the upstream checkout by one
+script:
+
+```bash
+scripts/build-conformance-binaries.sh   # PDFTRACT_REPO defaults to ../pdftract
+```
+
+- `pdftract-default` — the upstream crate's default cargo feature set
+  (empty: a plain release build).
+- `pdftract-full` — feature-complete (`--features profiles,grep`). Only
+  the feature-gated CLI surface needs it (`search()` → the `grep`
+  subcommand); when upstream's `profiles` feature does not compile at a
+  given checkout the script falls back to `grep` alone, which covers every
+  feature-gated surface the SDK's methods exercise.
+
+Both variants compile in one cargo target dir and are copied to
+`<upstream>/target/conformance/` — nothing is written into this repo's
+tree. The script fails fast with the seed recipe when a git-archive
+extraction is missing the untracked build-data directories upstream's
+generic `build/` gitignore pattern swallows
+(`crates/pdftract-core/build/CHECKSUMS.sha256`), warns loudly when the
+upstream tree is dirty (`PDFTRACT_REV` covers `.git`-less extractions),
+and smoke-gates both binaries on `--help` before printing the export lines
+the harness reads:
+
+```bash
+export PDFTRACT_BIN=…/target/conformance/pdftract-default
+export PDFTRACT_BIN_FULL=…/target/conformance/pdftract-full
+```
+
+Gating and clean-skip semantics:
+
+- `PDFTRACT_BIN` unset — every binary conformance case skips with a
+  message pointing at the build script: a clean skip, never a failure.
+  Set but not an executable file — the case fails loudly instead, so a
+  misconfigured path cannot masquerade as a skip.
+- `PDFTRACT_BIN_FULL` unset — only the feature-gated cases (search) skip;
+  every ungated-surface case still runs against `PDFTRACT_BIN`.
+- A plain `vendor/bin/phpunit` run needs no binary at all: the retired
+  suites are excluded via the `retired-cli-subprocess` group in
+  `phpunit.xml` and self-skip in `setUp()` regardless, and the two live
+  binary-gated suites key on `PDFTRACT_SERVE_BIN` (above), skipping with a
+  message the same way when unset. Because a clean skip is
+  indistinguishable from a suite that silently never ran, CI runs
+  `scripts/ci-assert-gated-ran.php` on the gated invocation's junit log so
+  a run that lost its binary fails the build instead of passing green.
+
+The serve-capable build is a different binary from a different script —
+`scripts/build-serve-bin.sh`, feeding `PDFTRACT_SERVE_BIN` (above); the
+stock conformance binaries cannot serve, so do not cross-wire the two
+variables. Upstream caveats and the re-landing decision for the retired
+suites: `docs/notes/binary-conformance-harness.md` and the "Conformance
+suite" section of `docs/notes/adr1-serve-parity-memo.md`.
+
+### Definition of done
+
+```bash
+scripts/definition-of-done.sh --fast
+```
+
+The repo's gate: the PHPUnit suite, green. The script resolves `php`
+(falling back to the nix-store `php-with-extensions` profile where plain
+`php` lacks the curl extension), resolves `composer` (nix-store profile,
+then a checksum-pinned composer 2.11.3 phar bootstrapped into a temp dir
+when the profile has been garbage-collected and `vendor/` is absent),
+runs `composer install` only when `vendor/` is missing, and execs
+`php vendor/bin/phpunit` with any extra arguments forwarded. `--fast` is
+consumed rather than forwarded — PHPUnit rejects unknown options — and
+selects nothing today because the suite has no slow partition. The gated
+suites skip cleanly without their binaries (see above), so a plain green
+run needs no binary at all.
 
 ## License
 
