@@ -45,6 +45,16 @@ use Psr\Log\LoggerInterface;
  * message union) is a fatal signature violation, the first of the two bugs
  * the retired script harboured (docs/plan/plan.md, known issues).
  *
+ * Coverage completeness (bead pdfphp-5ce102ff audit): together with the
+ * per-route suites this file now pins every logger call site in
+ * src/Client.php — the buffered execution record (here), the GET routes'
+ * execution record (here), the rejected-status / transport-failure /
+ * timeout records (here and in the buffered suite), the undecodable-
+ * response record (here), and the stream route's records (streaming
+ * suite). psr/log stays a hard composer `require`, not a `suggest`: the
+ * constructor instantiates Psr\Log\NullLogger unconditionally, so the
+ * package is needed to construct the client at all.
+ *
  * Every case runs offline: the loopback server answers from scripted
  * responses on an ephemeral 127.0.0.1 port, so nothing here can reach the
  * network beyond loopback.
@@ -120,6 +130,32 @@ final class ClientPsr3LoggerTest extends TestCase
         $context = $logger->records[0]['context'];
         self::assertSame('POST', $context['method']);
         self::assertSame($this->server->baseUri() . '/extract', $context['url']);
+        self::assertSame(12.0, $context['timeout']);
+    }
+
+    public function test_a_get_route_logs_the_same_execution_record_over_its_own_verb(): void
+    {
+        // The execution record is emitted by the shared request machinery,
+        // so the GET routes (health, server info) log the identical entry —
+        // with the method naming the verb that actually went out, not the
+        // multipart POST the buffered extraction uses.
+        $logger = new RawPsr3Logger();
+
+        $this->server->enqueue(ScriptedResponse::json('/health', ['status' => 'ok'], 'GET'));
+
+        $client = new Client($this->server->baseUri(), null, $logger, 12.0);
+
+        self::assertSame(['status' => 'ok'], $client->health());
+
+        self::assertSame(
+            [['debug', 'Executing pdftract request']],
+            $logger->messages(),
+            'a healthy GET logs exactly one debug entry and nothing else',
+        );
+
+        $context = $logger->records[0]['context'];
+        self::assertSame('GET', $context['method']);
+        self::assertSame($this->server->baseUri() . '/health', $context['url']);
         self::assertSame(12.0, $context['timeout']);
     }
 
@@ -229,6 +265,46 @@ final class ClientPsr3LoggerTest extends TestCase
         self::assertNotSame('', $context['error']);
         self::assertArrayNotHasKey('status', $context, 'a transport failure never reached the server, so there is no status');
         self::assertArrayNotHasKey('timeout', $context, 'a non-timeout transport failure must not borrow the timeout entry shape');
+    }
+
+    public function test_an_undecodable_response_is_logged_as_an_error_record_with_the_json_error(): void
+    {
+        // The README promises an undecodable response its own record: a 2xx
+        // body that is not valid JSON logs the execution debug entry and
+        // then the decode error entry, whose context carries curl's URL and
+        // json's own diagnosis — the same facts the raised PdftractException
+        // wraps, but no 'status' key (the status was 200; the failure is an
+        // encoding failure, not a rejected request).
+        $logger = new RawPsr3Logger();
+
+        $this->server->enqueue(ScriptedResponse::text('<html><body>moved</body></html>', '/extract'));
+
+        $client = new Client($this->server->baseUri(), null, $logger, 12.0);
+
+        $exception = null;
+
+        try {
+            $client->extract(Source::bytes(self::PDF_BYTES));
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertInstanceOf(PdftractException::class, $exception);
+        self::assertSame(200, $exception->getStatusCode(), 'the failure is an encoding error, not a server error');
+
+        self::assertSame(
+            [
+                ['debug', 'Executing pdftract request'],
+                ['error', 'Failed to decode JSON response'],
+            ],
+            $logger->messages(),
+        );
+
+        $context = $logger->records[1]['context'];
+        self::assertSame($this->server->baseUri() . '/extract', $context['url']);
+        self::assertSame('Syntax error', $context['json_error']);
+        self::assertArrayNotHasKey('status', $context, 'a 2xx body that will not decode carries no status in the record');
+        self::assertArrayNotHasKey('error', $context, 'there is no server error string to carry — json_last_error_msg() is the diagnosis');
     }
 }
 
