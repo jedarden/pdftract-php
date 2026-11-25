@@ -85,6 +85,16 @@ use Psr\Log\AbstractLogger;
  * test_the_idle_deadline_resets_on_every_chunk_* proves the clock restarts
  * at each record), and the raised TimeoutException names "silence".
  *
+ * The transport-error section completes the buffered suite's transport-error
+ * program (bead pdfphp-2bf537d0) on this route: a connection refused before
+ * the body starts and an unresolvable host both surface as the typed
+ * ConnectionException on the stream route too. The mirror is not automatic —
+ * extractStream() hand-rolls its own transport as a curl_multi loop
+ * (src/Client.php stream()/streamTransportError()), so the buffered pins,
+ * which exercise the curl_exec path, cannot reach this route's failure
+ * handling; only a stream-routed case proves a pre-body transport failure is
+ * not a hang, a silent truncation, or a bare curl warning.
+ *
  * The logging section (bead pdfphp-f2b0b682) holds the stream route's PSR-3
  * contract to the same standard the buffered suite holds its own
  * (test_a_buffered_request_and_its_failure_are_logged in
@@ -949,6 +959,75 @@ final class ClientStreamingRouteTest extends TestCase
         // What arrived before the drop still reached the caller: the
         // exception reports the loss instead of retroactively hiding it.
         self::assertSame($records, $received);
+    }
+
+    // ------------------------------------------------------- transport errors
+
+    public function test_a_refused_connection_surfaces_as_a_connection_exception_before_the_stream_body(): void
+    {
+        // The stream route's share of the buffered suite's refused-connection
+        // pin, and the pre-body twin of the mid-stream drop test above: the
+        // server is gone before the request is even sent, so the failure is
+        // curl's "no HTTP response at all" — reported through the curl_multi
+        // loop's own result code (src/Client.php streamTransportError()),
+        // never through the buffered transportError() path the buffered pin
+        // exercises. It must surface as the typed ConnectionException the
+        // buffered routes raise, carrying the URL and the underlying curl
+        // reason, with no status (nothing answered), no error code, and no
+        // record — not as a hang on a port nobody will answer.
+        $deadServer = LoopbackServer::start();
+        $baseUri = $deadServer->baseUri();
+        $deadServer->stop();
+
+        $client = new Client($baseUri);
+
+        $records = [];
+        $exception = null;
+
+        try {
+            foreach ($client->extractStream(Source::bytes(self::PDF_BYTES), ['timeout' => 0]) as $record) {
+                $records[] = $record;
+            }
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, 'extractStream() must not survive a refused connection');
+        self::assertInstanceOf(ConnectionException::class, $exception);
+        self::assertStringContainsString($baseUri, $exception->getMessage());
+        self::assertNotSame('', $exception->getReason(), 'the underlying curl error should be carried');
+        self::assertNull($exception->getStatusCode(), 'a transport failure never reached the server');
+        self::assertNull($exception->getErrorCode());
+        self::assertSame([], $records, 'no record can come from a connection that was never accepted');
+    }
+
+    public function test_an_unresolvable_host_surfaces_as_a_connection_exception_on_the_stream_route(): void
+    {
+        // The stream route's share of the buffered suite's DNS-failure pin:
+        // .invalid is reserved and never resolves, so this is an offline DNS
+        // failure — the curl_multi loop's other pre-body transport error —
+        // and it must map to ConnectionException rather than leak as a bare
+        // curl warning or masquerade as a timeout.
+        $client = new Client('http://pdftract-stream-suite.unresolvable.invalid');
+
+        $records = [];
+        $exception = null;
+
+        try {
+            foreach ($client->extractStream(Source::bytes(self::PDF_BYTES), ['timeout' => 0]) as $record) {
+                $records[] = $record;
+            }
+        } catch (PdftractException $caught) {
+            $exception = $caught;
+        }
+
+        self::assertNotNull($exception, 'a DNS failure must not surface as a bare curl warning');
+        self::assertInstanceOf(ConnectionException::class, $exception);
+        self::assertStringContainsString('pdftract-stream-suite.unresolvable.invalid', $exception->getMessage());
+        self::assertNotSame('', $exception->getReason());
+        self::assertNull($exception->getStatusCode());
+        self::assertNull($exception->getErrorCode());
+        self::assertSame([], $records, 'no record can come from a request that never left the machine');
     }
 
     // ------------------------------------------------- malformed NDJSON lines
