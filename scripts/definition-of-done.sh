@@ -44,6 +44,60 @@ if ! command -v php >/dev/null 2>&1; then
     exit 1
 fi
 
+# License gate — composer.json, the README, and the eventual Packagist
+# listing all claim MIT, so assert the LICENSE file actually backs that
+# claim before the suite runs: present at the repo root, opening with the
+# standard MIT title, carrying a real "Copyright (c) <year> <holder>" line,
+# verbatim standard grant text past the copyright, and a composer.json
+# license field that agrees. composer validate does not check for the file,
+# and a missing or divergent LICENSE is a silent blocker for the Packagist
+# publication path (bf-64f).
+mit_body='Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.'
+
+license_gate() {
+    if [[ ! -f LICENSE ]]; then
+        echo "error: LICENSE missing at the repo root (composer.json declares MIT)" >&2
+        return 1
+    fi
+    local declared
+    declared="$(php -r 'echo json_decode(file_get_contents("composer.json"), true)["license"] ?? "";')"
+    if [[ "$declared" != "MIT" ]]; then
+        echo "error: composer.json license is '$declared'; LICENSE and the README claim MIT" >&2
+        return 1
+    fi
+    if [[ "$(head -n 1 LICENSE)" != "MIT License" ]]; then
+        echo "error: LICENSE does not open with the standard 'MIT License' title" >&2
+        return 1
+    fi
+    if ! grep -qE '^Copyright \(c\) [0-9]{4,} .+' LICENSE; then
+        echo "error: LICENSE copyright line missing or not 'Copyright (c) <year> <holder>'" >&2
+        return 1
+    fi
+    if [[ "$(sed -n '/^Permission is hereby granted/,$p' LICENSE)" != "$mit_body" ]]; then
+        echo "error: LICENSE grant body diverges from the standard MIT text" >&2
+        return 1
+    fi
+    echo "==> license gate: LICENSE is the standard MIT text, consistent with composer.json (MIT)"
+}
+
+license_gate
+
 if ! command -v composer >/dev/null 2>&1; then
     for candidate in /nix/store/*-composer-*/bin/composer; do
         if [[ -x "$candidate" ]]; then
