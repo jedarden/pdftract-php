@@ -11,6 +11,23 @@ resolved inside the monorepo. In the standalone repo that directory does not
 exist, so `setUp()` failed immediately and every test errored before running
 (see `docs/plan/plan.md`, "Known issues", and bead `bf-1o3`).
 
+## Provenance
+
+- **Vendored:** 2026-07-30 from the upstream `pdftract` checkout (bead `bf-1o3`,
+  which fixed only the path assumption in `ConformanceTest.php`).
+- **Verified against upstream `pdftract` @ `eeab77e7d13b579328a8d4b3ff06616cd23f359c`**
+  (2026-09-10, the revision pinned by `docs/notes/serve-parity-gap.md`) on
+  **2026-11-24** (bead `pdfphp-9ed2069f`): `cases.json`, `schema.json`, and
+  `report-schema.json` are byte-identical to upstream at that revision, and all
+  32 fixtures referenced by `cases.json` compare byte-for-byte equal. Note that
+  upstream `tests/sdk-conformance/fixtures/{contract,invoice,misc,scientific_paper}`
+  are symlinks into `tests/fixtures/classifier/`, so those four vendored dirs
+  were diffed against the classifier trees at the same revision. The vendored
+  file set exactly equals the fixture set `cases.json` references — upstream's
+  generator scripts and its stale nested `fixtures/tests/` copies are
+  intentionally not vendored. No drift was found, so no re-vendor was needed;
+  this check should be repeated whenever upstream moves.
+
 ## Contents
 
 - `cases.json` — the conformance case definitions (method, options, expected
