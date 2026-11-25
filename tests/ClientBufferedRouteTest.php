@@ -442,6 +442,109 @@ final class ClientBufferedRouteTest extends TestCase
         }
     }
 
+    // ------------------------------------- documented serve fields (completeness)
+
+    /**
+     * Every multipart field the serve contract documents — ExtractParams
+     * (serve.rs:211-228, eeab77e) — is accepted by the client and forwarded
+     * with the contract's snake_case name and the caller's value
+     *
+     * This is the completeness direction, the twin of the minimality pin
+     * above ({@see self::test_extract_forwards_options_as_the_only_snake_case_fields}):
+     * that pin holds "nothing but forwarded options goes out", this one holds
+     * "each documented field goes out when asked". One option per case, the
+     * whole field map pinned to exactly one snake_case entry — so a dropped
+     * field, an extra one, a camelCase leak, a mis-cased name, or a mangled
+     * value fails the case that names the field, not an aggregate. Three of
+     * the names (receipts, max_decompress_gb, markdown_anchors) appear in no
+     * buffered-route pin except this provider.
+     *
+     * Each case runs on both buffered routes: receive_pdf reads the same
+     * field list on every POST route, so the routes differ in response
+     * shape, not in what they accept.
+     *
+     * Values sit inside the value domains the serve contract documents per
+     * field (receive_pdf doc comment, serve.rs:779-786): receipts is a mode
+     * string — "off", "lite", or "svg", not a boolean; pages is a range
+     * string ("1-5,7,12-"); max_decompress_gb and ocr_dpi are integers the
+     * server parses with parse_int (a garbage value is silently dropped
+     * server-side, so a mangled client value would degrade silently);
+     * no_cache, full_render, and markdown_anchors are booleans the client
+     * stringises as 'true' (false and null are dropped — that half is the
+     * minimality pin's). The server reads no_cache's presence, never its
+     * value text, so the pin holds the client's honest stringisation of
+     * what a caller asked for, not a server effect.
+     */
+    #[DataProvider('provideDocumentedServeFields')]
+    public function test_each_documented_serve_field_is_forwarded_with_its_contract_name_and_value(
+        string $method,
+        string $route,
+        string $optionKey,
+        int|bool|string $optionValue,
+        string $expectedField,
+        string $expectedValue,
+    ): void {
+        if ($method === 'extract') {
+            $this->server->enqueue(ScriptedResponse::json($route, self::DOCUMENT));
+        } else {
+            $this->server->enqueue(ScriptedResponse::text("span one\n", $route));
+        }
+
+        $client = new Client($this->server->baseUri());
+        $client->{$method}(Source::bytes(self::PDF_BYTES), [$optionKey => $optionValue]);
+
+        $request = $this->server->lastRequest();
+        self::assertNotNull($request, 'the request never reached the loopback server');
+        self::assertSame($route, $request->path(), $request->describe());
+
+        // One option in, exactly one field out: the contract's snake_case
+        // name carrying the value verbatim (booleans as the string 'true',
+        // integers as decimal text). assertSame on the whole map is what
+        // makes a leak or a mangle fail this case and no other.
+        self::assertSame([$expectedField => $expectedValue], $request->fields(), $request->describe());
+
+        // The upload still rides alongside — "additional fields" is
+        // additional to the document — and the option travels as a form
+        // field, never on the query string.
+        $this->assertDocumentUpload($request);
+        self::assertSame('', $request->queryString(), $request->describe());
+    }
+
+    /**
+     * The eight documented ExtractParams fields, each as
+     * [method, route, option key, option value, wire field, wire value]
+     *
+     * file/pdf are the document's own fields, not options — covered by the
+     * upload pins ({@see self::test_a_file_source_uploads_the_file_bytes} and
+     * the reserved-field guard). The streaming route's aggregate full-set
+     * pin (tests/ClientStreamingRouteTest.php, ACCEPTED_FIELDS) holds the
+     * same eight names on POST /extract/stream.
+     */
+    public static function provideDocumentedServeFields(): array
+    {
+        // [option key, caller value, snake_case field, expected wire value]
+        $fields = [
+            'receipts (mode string: off|lite|svg)' => ['receipts', 'svg', 'receipts', 'svg'],
+            'no_cache (presence-read boolean)' => ['noCache', true, 'no_cache', 'true'],
+            'full_render (boolean flag)' => ['fullRender', true, 'full_render', 'true'],
+            'max_decompress_gb (integer GB cap)' => ['maxDecompressGb', 2, 'max_decompress_gb', '2'],
+            'ocr_language (comma-separated codes)' => ['ocrLanguage', 'deu', 'ocr_language', 'deu'],
+            'ocr_dpi (integer DPI override)' => ['ocrDpi', 300, 'ocr_dpi', '300'],
+            'markdown_anchors (boolean flag)' => ['markdownAnchors', true, 'markdown_anchors', 'true'],
+            'pages (page-range string)' => ['pages', '2-5,9', 'pages', '2-5,9'],
+        ];
+
+        $cases = [];
+
+        foreach (['extract' => '/extract', 'extractText' => '/extract/text'] as $method => $route) {
+            foreach ($fields as $label => [$key, $value, $field, $wire]) {
+                $cases["{$method}: {$label}"] = [$method, $route, $key, $value, $field, $wire];
+            }
+        }
+
+        return $cases;
+    }
+
     // ------------------------------------------------------ response mapping
 
     public function test_extract_maps_the_json_body_to_the_documented_php_value(): void
